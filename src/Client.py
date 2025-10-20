@@ -1,32 +1,24 @@
 import socket
 import threading
-Server_IP = "127.0.0.1"
-Server_Port = 20000
-Max_data = 1024
 
-ClientSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-ClientSocket.connect((Server_IP, Server_Port))
-print("Ket noi Server Thanh Cong!")
-
-def Listening():
+def receive(client):
     while True:
         try:
-            data = ClientSocket.recv(Max_data)
-            if data:
-                print(data.decode('utf-8'))
-            else:
-                break
+            msg = client.recv(1024).decode('utf-8')
+            print(f"\n{msg}")
+            print("> ", end='', flush=True)
         except:
             break
 
-Luong_2 = threading.Thread(target=Listening)
-Luong_2.start()
+client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+client.connect(("127.0.0.1", 20000))
+
+threading.Thread(target=receive, args=(client,), daemon=True).start()
 
 while True:
-    msg = input()
-    if msg.lower() == "exit":
+    msg = input("> ")
+    if msg.lower() == 'exit':
         break
-    ClientSocket.send(msg.encode('utf-8'))
+    client.send(msg.encode('utf-8'))
 
-ClientSocket.close()
-print("Disconnected.")
+client.close()
