@@ -4,9 +4,10 @@ import sqlite3
 import hashlib
 import time
 
-clients = {}
+clients = {}  # {conn: username}
 lock = threading.Lock()
 db_lock = threading.Lock()
+pending_requests = {}  # {(sender, receiver): message}
 
 conn_db = sqlite3.connect("chat.db", check_same_thread=False)
 c = conn_db.cursor()
@@ -46,6 +47,18 @@ def broadcast(message, exclude=None):
                     conn.send(message)
                 except:
                     pass
+
+def notify_user(username, message):
+    """Gửi thông báo tới 1 user cụ thể"""
+    with lock:
+        for conn, uname in clients.items():
+            if uname == username:
+                try:
+                    conn.send(message)
+                    return True
+                except:
+                    pass
+    return False
 
 def handle_client(conn, addr):
     username = None
@@ -90,6 +103,7 @@ def handle_client(conn, addr):
 === LỆNH ===
 /help - Hiện menu
 /list - Danh sách online
+/msg <tên> <tin nhắn> - Yêu cầu chat riêng
 /exit - Thoát
 ================
 """
@@ -99,6 +113,34 @@ def handle_client(conn, addr):
                 with lock:
                     users = [u for u in clients.values() if u != username]
                 conn.send(f"Online: {', '.join(users) if users else 'Không có'}\n".encode('utf-8'))
+            
+            elif msg.startswith('/msg '):
+                parts = msg.split(' ', 2)
+                if len(parts) < 3:
+                    conn.send("Cách dùng: /msg <tên> <tin nhắn>\n".encode('utf-8'))
+                    continue
+                
+                target_user = parts[1]
+                message = parts[2]
+                
+                # Kiểm tra user tồn tại
+                with lock:
+                    if target_user not in clients.values():
+                        conn.send(f"✗ {target_user} không online!\n".encode('utf-8'))
+                        continue
+                    
+                    if target_user == username:
+                        conn.send("✗ Không thể gửi cho chính mình!\n".encode('utf-8'))
+                        continue
+                
+                # Lưu request
+                pending_requests[(username, target_user)] = message
+                
+                # Thông báo cho người nhận
+                notify_user(target_user, 
+                    f"\n[YÊU CẦU] {username} muốn chat riêng: '{message}'\n".encode('utf-8'))
+                
+                conn.send(f"✓ Đã gửi yêu cầu tới {target_user}\n".encode('utf-8'))
             
             elif msg == '/exit':
                 conn.send("Tạm biệt!\n".encode('utf-8'))
@@ -124,3 +166,4 @@ print("Server với Commands...")
 while True:
     conn, addr = server.accept()
     threading.Thread(target=handle_client, args=(conn, addr), daemon=True).start()
+
