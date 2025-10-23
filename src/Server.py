@@ -4,10 +4,11 @@ import sqlite3
 import hashlib
 import time
 
-clients = {}  # {conn: username}
+clients = {}
+client_states = {}  # {username: 'public' hoặc 'private'}
 lock = threading.Lock()
 db_lock = threading.Lock()
-pending_requests = {}  # {(sender, receiver): message}
+pending_requests = {}
 
 conn_db = sqlite3.connect("chat.db", check_same_thread=False)
 c = conn_db.cursor()
@@ -41,15 +42,14 @@ def login_user(username, password):
 
 def broadcast(message, exclude=None):
     with lock:
-        for conn in clients:
-            if conn != exclude:
+        for conn, uname in clients.items():
+            if uname != exclude:
                 try:
                     conn.send(message)
                 except:
                     pass
 
 def notify_user(username, message):
-    """Gửi thông báo tới 1 user cụ thể"""
     with lock:
         for conn, uname in clients.items():
             if uname == username:
@@ -87,6 +87,7 @@ def handle_client(conn, addr):
     
     with lock:
         clients[conn] = username
+        client_states[username] = 'public'
     
     conn.send("Gõ /help để xem lệnh\n".encode('utf-8'))
     broadcast(f"[Hệ thống] {username} vào phòng".encode('utf-8'))
@@ -103,7 +104,9 @@ def handle_client(conn, addr):
 === LỆNH ===
 /help - Hiện menu
 /list - Danh sách online
-/msg <tên> <tin nhắn> - Yêu cầu chat riêng
+/msg <tên> <tin> - Yêu cầu chat riêng
+/accept <tên> - Chấp nhận yêu cầu
+/decline <tên> - Từ chối yêu cầu
 /exit - Thoát
 ================
 """
@@ -117,30 +120,52 @@ def handle_client(conn, addr):
             elif msg.startswith('/msg '):
                 parts = msg.split(' ', 2)
                 if len(parts) < 3:
-                    conn.send("Cách dùng: /msg <tên> <tin nhắn>\n".encode('utf-8'))
+                    conn.send("Cách dùng: /msg <tên> <tin>\n".encode('utf-8'))
                     continue
                 
                 target_user = parts[1]
                 message = parts[2]
                 
-                # Kiểm tra user tồn tại
                 with lock:
                     if target_user not in clients.values():
                         conn.send(f"✗ {target_user} không online!\n".encode('utf-8'))
                         continue
                     
-                    if target_user == username:
-                        conn.send("✗ Không thể gửi cho chính mình!\n".encode('utf-8'))
+                    if client_states.get(target_user) == 'private':
+                        conn.send(f"✗ {target_user} đang chat riêng!\n".encode('utf-8'))
                         continue
                 
-                # Lưu request
                 pending_requests[(username, target_user)] = message
-                
-                # Thông báo cho người nhận
                 notify_user(target_user, 
-                    f"\n[YÊU CẦU] {username} muốn chat riêng: '{message}'\n".encode('utf-8'))
-                
+                    f"\n[YÊU CẦU] {username}: '{message}'\nGõ /accept {username} hoặc /decline {username}\n".encode('utf-8'))
                 conn.send(f"✓ Đã gửi yêu cầu tới {target_user}\n".encode('utf-8'))
+            
+            elif msg.startswith('/accept '):
+                requester = msg.split(' ', 1)[1]
+                
+                if (requester, username) not in pending_requests:
+                    conn.send(f"✗ Không có yêu cầu từ {requester}!\n".encode('utf-8'))
+                    continue
+                
+                del pending_requests[(requester, username)]
+                
+                with lock:
+                    client_states[username] = 'private'
+                    client_states[requester] = 'private'
+                
+                conn.send(f"✓ Đã chấp nhận! Chat riêng với {requester}\n".encode('utf-8'))
+                notify_user(requester, f"\n✓ {username} đã chấp nhận yêu cầu!\n".encode('utf-8'))
+            
+            elif msg.startswith('/decline '):
+                requester = msg.split(' ', 1)[1]
+                
+                if (requester, username) not in pending_requests:
+                    conn.send(f"✗ Không có yêu cầu từ {requester}!\n".encode('utf-8'))
+                    continue
+                
+                del pending_requests[(requester, username)]
+                conn.send(f"✓ Đã từ chối {requester}\n".encode('utf-8'))
+                notify_user(requester, f"\n✗ {username} đã từ chối\n".encode('utf-8'))
             
             elif msg == '/exit':
                 conn.send("Tạm biệt!\n".encode('utf-8'))
@@ -148,20 +173,22 @@ def handle_client(conn, addr):
             
             elif msg:
                 save_message(username, msg)
-                broadcast(f"[{username}] {msg}".encode('utf-8'), conn)
+                broadcast(f"[{username}] {msg}".encode('utf-8'), username)
         except:
             break
     
     with lock:
         if conn in clients:
             del clients[conn]
+        if username in client_states:
+            del client_states[username]
     broadcast(f"[Hệ thống] {username} rời phòng".encode('utf-8'))
     conn.close()
 
 server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server.bind(("127.0.0.1", 20000))
 server.listen()
-print("Server với Commands...")
+print("Server với Accept/Decline...")
 
 while True:
     conn, addr = server.accept()
