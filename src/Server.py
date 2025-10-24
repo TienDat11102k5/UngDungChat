@@ -9,6 +9,7 @@ client_states = {}  # {username: 'public' hoặc 'private'}
 lock = threading.Lock()
 db_lock = threading.Lock()
 pending_requests = {}
+private_rooms = {}
 
 conn_db = sqlite3.connect("chat.db", check_same_thread=False)
 c = conn_db.cursor()
@@ -60,15 +61,27 @@ def notify_user(username, message):
                     pass
     return False
 
+def get_history(user1=None, user2=None, limit=20):
+    """Lấy lịch sử chat"""
+    with db_lock:
+        if user1 and user2:
+            # Lịch sử chat riêng
+            c.execute("""SELECT sender, receiver, message, timestamp 
+                        FROM private_messages 
+                        WHERE (sender=? AND receiver=?) OR (sender=? AND receiver=?)
+                        ORDER BY id DESC LIMIT ?""", 
+                     (user1, user2, user2, user1, limit))
+        else:
+            # Lịch sử phòng chung
+            c.execute("SELECT username, message, timestamp FROM messages ORDER BY id DESC LIMIT ?", (limit,))
+        return list(reversed(c.fetchall()))
+
 def handle_client(conn, addr):
     username = None
-    
     conn.send("1-Đăng ký | 2-Đăng nhập: ".encode('utf-8'))
     choice = conn.recv(1024).decode('utf-8').strip()
-    
     conn.send("Username: ".encode('utf-8'))
     username = conn.recv(1024).decode('utf-8').strip()
-    
     conn.send("Password: ".encode('utf-8'))
     password = conn.recv(1024).decode('utf-8').strip()
     
@@ -105,6 +118,7 @@ def handle_client(conn, addr):
 /help - Hiện menu
 /list - Danh sách online
 /msg <tên> <tin> - Yêu cầu chat riêng
+/history - Xem lịch sử chat 
 /accept <tên> - Chấp nhận yêu cầu
 /decline <tên> - Từ chối yêu cầu
 /exit - Thoát
@@ -142,11 +156,9 @@ def handle_client(conn, addr):
             
             elif msg.startswith('/accept '):
                 requester = msg.split(' ', 1)[1]
-                
                 if (requester, username) not in pending_requests:
                     conn.send(f"✗ Không có yêu cầu từ {requester}!\n".encode('utf-8'))
                     continue
-                
                 del pending_requests[(requester, username)]
                 
                 with lock:
@@ -166,6 +178,23 @@ def handle_client(conn, addr):
                 del pending_requests[(requester, username)]
                 conn.send(f"✓ Đã từ chối {requester}\n".encode('utf-8'))
                 notify_user(requester, f"\n✗ {username} đã từ chối\n".encode('utf-8'))
+            
+           
+            elif msg in ['/history', '/his']:
+                with lock:
+                    if username in private_rooms:
+                        partner = private_rooms[username]
+                        history = get_history(username, partner)
+                        conn.send(f"\n=== LỊCH SỬ CHAT với {partner} ===\n".encode('utf-8'))
+                        for sender, receiver, text, ts in history:
+                            prefix = "Bạn" if sender == username else sender
+                            conn.send(f"[{ts}] {prefix}: {text}\n".encode('utf-8'))
+                    else:
+                        history = get_history()
+                        conn.send("\n=== LỊCH SỬ PHÒNG CHUNG ===\n".encode('utf-8'))
+                        for uname, text, ts in history:
+                            conn.send(f"[{ts}] {uname}: {text}\n".encode('utf-8'))
+                    conn.send("==================\n".encode('utf-8')) 
             
             elif msg == '/exit':
                 conn.send("Tạm biệt!\n".encode('utf-8'))
@@ -193,4 +222,3 @@ print("Server với Accept/Decline...")
 while True:
     conn, addr = server.accept()
     threading.Thread(target=handle_client, args=(conn, addr), daemon=True).start()
-
