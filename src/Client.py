@@ -1,24 +1,21 @@
 import socket
 import threading
+import sys
+import os
 
-def receive(client):
-    while True:
-        try:
-            msg = client.recv(1024).decode('utf-8')
-            print(f"\n{msg}")
-            print("> ", end='', flush=True)
-        except:
-            break
+SERVER_IP = "127.0.0.1"
+SERVER_PORT = 20000
+MAX_DATA = 1024
 
-client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-client.connect(("127.0.0.1", 20000))
+client_socket = None
+running = True
+authenticated = False
 
-threading.Thread(target=receive, args=(client,), daemon=True).start()
+def clear_screen():
+    """Xóa màn hình console"""
+    os.system('cls' if os.name == 'nt' else 'clear')
 
-while True:
-    msg = input("> ")
-    if msg.lower() == 'exit':
-        break
-    client.send(msg.encode('utf-8'))
 
-client.close()
+def print_separator():
+    """In dòng phân cách"""
+    print("=" * 60)
