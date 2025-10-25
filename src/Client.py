@@ -102,3 +102,31 @@ def receive_messages():
                 print(f"\n[LỖI] Lỗi nhận tin: {e}")
             running = False
             break
+
+def send_messages():
+    """Thread gửi tin nhắn tới server"""
+    global running
+    
+    while running:
+        try:
+            message = input()
+            
+            if not running:
+                break
+            
+            if message.strip():
+                client_socket.send(message.encode('utf-8'))
+                
+                if message.strip() == '/exit':
+                    running = False
+                    break
+        
+        except KeyboardInterrupt:
+            print("\n\n[HỆ THỐNG] Đang thoát...")
+            running = False
+            break
+        except Exception as e:
+            if running:
+                print(f"[LỖI] Lỗi gửi tin: {e}")
+            running = False
+            break
