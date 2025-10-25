@@ -130,3 +130,53 @@ def send_messages():
                 print(f"[LỖI] Lỗi gửi tin: {e}")
             running = False
             break
+
+def main():
+    """Hàm chính khởi động client"""
+    global client_socket, running
+    
+    # Hiển thị banner
+    clear_screen()
+    print_separator()
+    print("         CHAT CLIENT - KẾT NỐI VỚI SERVER")
+    print_separator()
+    print(f"Server: {SERVER_IP}:{SERVER_PORT}")
+    print_separator()
+    
+    try:
+        # Kết nối tới server
+        client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        client_socket.connect((SERVER_IP, SERVER_PORT))
+        print("\n✓ Đã kết nối thành công!")
+        print("\nĐang chờ server...")
+        
+        # Tạo thread nhận tin nhắn
+        receive_thread = threading.Thread(target=receive_messages, daemon=True)
+        receive_thread.start()
+        
+        # Thread chính xử lý gửi tin
+        send_messages()
+        
+    except ConnectionRefusedError:
+        print("\n✗ Không thể kết nối! Server có thể chưa bật.")
+        print(f"   Kiểm tra server đang chạy tại {SERVER_IP}:{SERVER_PORT}")
+    except KeyboardInterrupt:
+        print("\n\n[HỆ THỐNG] Thoát bằng Ctrl+C")
+    except Exception as e:
+        print(f"\n✗ Lỗi kết nối: {e}")
+    finally:
+        running = False
+        if client_socket:
+            try:
+                client_socket.close()
+            except:
+                pass
+        print("\n[HỆ THỐNG] Đã ngắt kết nối")
+        print_separator()
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n\nTạm biệt!")
+        sys.exit(0)
