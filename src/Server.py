@@ -119,6 +119,7 @@ def handle_client(conn, addr):
 /list - Danh sách online
 /msg <tên> <tin> - Yêu cầu chat riêng
 /history - Xem lịch sử chat 
+/changepass  - Thay đổi mật khẩu
 /accept <tên> - Chấp nhận yêu cầu
 /decline <tên> - Từ chối yêu cầu
 /exit - Thoát
@@ -195,6 +196,27 @@ def handle_client(conn, addr):
                         for uname, text, ts in history:
                             conn.send(f"[{ts}] {uname}: {text}\n".encode('utf-8'))
                     conn.send("==================\n".encode('utf-8')) 
+            elif msg.startswith('/changepass '):
+                parts = msg.split(' ')
+                if len(parts) != 3:
+                    conn.send("Cách dùng: /changepass <mật khẩu cũ> <mật khẩu mới>\n".encode('utf-8'))
+                    continue
+                
+                old_pass = parts[1]
+                new_pass = parts[2]
+                
+                with db_lock:
+                    c.execute("SELECT password FROM users WHERE username=?", (username,))
+                    current_hash = c.fetchone()[0]
+                    
+                    if current_hash == hash_password(old_pass):
+                        c.execute("UPDATE users SET password=? WHERE username=?", 
+                                 (hash_password(new_pass), username))
+                        conn_db.commit()
+                        conn.send("✓ Đổi mật khẩu thành công!\n".encode('utf-8'))
+                    else:
+                        conn.send("✗ Sai mật khẩu cũ!\n".encode('utf-8'))
+
             
             elif msg == '/exit':
                 conn.send("Tạm biệt!\n".encode('utf-8'))
