@@ -3,6 +3,7 @@ import threading
 import sqlite3
 import hashlib
 import time
+import os
 
 clients = {}
 client_states = {}  # {username: 'public' hoặc 'private'}
@@ -239,8 +240,27 @@ def handle_client(conn, addr):
 server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server.bind(("127.0.0.1", 20000))
 server.listen()
-print("Server với Accept/Decline...")
+print("Server với Compan...")
 
+print("\n=== LỆNH ADMIN ===")
+print("exit    - Tắt server")
+print("==================\n")
+
+def admin_console():
+    while True:
+        try:
+            cmd = input().strip().lower()
+            if cmd == 'exit':
+                print("\n[Đang tắt server...]")
+                os._exit(0)
+            else:
+                if cmd:
+                    print("Lệnh hợp lệ: exit")
+        except KeyboardInterrupt:
+            print("\n[Tắt server bằng Ctrl+C]")
+            os._exit(0)
+threading.Thread(target=admin_console, daemon=True).start()
 while True:
     conn, addr = server.accept()
     threading.Thread(target=handle_client, args=(conn, addr), daemon=True).start()
+ 
