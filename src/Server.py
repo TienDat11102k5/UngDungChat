@@ -6,12 +6,10 @@ import time
 import os
 import logging
 
-clients = {}
-client_states = {}  # {username: 'public' hoặc 'private'}
+Client_list = []  # [(conn, addr, username, room_type, room_target)]
 lock = threading.Lock()
 db_lock = threading.Lock()
 pending_requests = {}
-private_rooms = {}
 
 LOG_FILE = "server_log.txt"
 logging.basicConfig(
@@ -59,14 +57,19 @@ def login_user(username, password):
         result = c.fetchone()
     return result and result[0] == hash_password(password)
 
-def broadcast(message, exclude=None):
+def broadcast_public(sender, msg, exclude_sender=True):
+    """Gửi tin nhắn tới tất cả người trong phòng chung"""
     with lock:
-        for conn, uname in clients.items():
-            if uname != exclude:
+        for c, _, u, rt, _ in Client_list:
+            if rt == "public" and (not exclude_sender or u != sender):
                 try:
-                    conn.send(message)
+                    if sender == "MÁY CHỦ":
+                        c.send(f"[MÁY CHỦ] {msg}".encode('utf-8'))
+                    else:
+                        c.send(f"[{sender}] {msg}".encode('utf-8'))
                 except:
                     pass
+
 
 def notify_user(username, message):
     with lock:
@@ -93,6 +96,32 @@ def get_history(user1=None, user2=None, limit=20):
             # Lịch sử phòng chung
             c.execute("SELECT username, message, timestamp FROM messages ORDER BY id DESC LIMIT ?", (limit,))
         return list(reversed(c.fetchall()))
+    
+def get_user_conn(username):
+    """Lấy connection của user"""
+    with lock:
+        for conn, addr, uname, room_type, room_target in Client_list:
+            if uname == username:
+                return conn
+    return None
+
+def get_current_state(username):
+    """Lấy (room_type, room_target) của user"""
+    with lock:
+        for _, _, uname, room_type, room_target in Client_list:
+            if uname == username:
+                return room_type, room_target
+    return None, None
+
+def update_user_state(username, new_room_type, new_room_target):
+    """Cập nhật trạng thái user"""
+    with lock:
+        for idx, (conn, addr, uname, room_type, room_target) in enumerate(Client_list):
+            if uname == username:
+                Client_list[idx] = (conn, addr, uname, new_room_type, new_room_target)
+                logging.info(f"[CẬP NHẬT] {username}: {new_room_type}/{new_room_target}")
+                return True
+    return False
 
 def handle_client(conn, addr):
     username = None
