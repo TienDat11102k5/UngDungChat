@@ -6,11 +6,12 @@ import time
 import os
 import logging
 
-Client_list = []  # [(conn, addr, username, room_type, room_target)]
+clients = {}
+client_states = {}  # {username: 'public' hoặc 'private'}
 lock = threading.Lock()
 db_lock = threading.Lock()
 pending_requests = {}
-
+private_rooms = {}
 
 LOG_FILE = "server_log.txt"
 logging.basicConfig(
@@ -27,17 +28,20 @@ conn_db = sqlite3.connect("chat.db", check_same_thread=False)
 c = conn_db.cursor()
 c.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, username TEXT UNIQUE, password TEXT)")
 c.execute("CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY, username TEXT, message TEXT, timestamp TEXT)")
-c.execute("""CREATE TABLE IF NOT EXISTS private_messages (id INTEGER PRIMARY KEY, sender TEXT, receiver TEXT, message TEXT, timestamp TEXT)""")
+c.execute("""CREATE TABLE IF NOT EXISTS private_messages (id INTEGER PRIMARY KEY,sender TEXT,receiver TEXT,message TEXT,timestamp TEXT)""")
 conn_db.commit()
 
 
 def hash_password(pwd):
     return hashlib.sha256(pwd.encode()).hexdigest()
 
-def save_message(username, message):
+def save_message(username, message, private_to=None):
     with db_lock:
         timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
-        c.execute("INSERT INTO messages VALUES (NULL, ?, ?, ?)", (username, message, timestamp))
+        if private_to:
+            c.execute("INSERT INTO private_messages VALUES (NULL, ?, ?, ?, ?)", (username, private_to, message, timestamp))
+        else:
+            c.execute("INSERT INTO messages VALUES (NULL, ?, ?, ?)", (username, message, timestamp))
         conn_db.commit()
 
 def register_user(username, password):
