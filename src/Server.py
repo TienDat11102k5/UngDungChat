@@ -243,6 +243,9 @@ server.listen()
 print("Server với Compan...")
 
 print("\n=== LỆNH ADMIN ===")
+print("users   - Xem danh sách client")
+print("rooms   - Xem phòng chat")
+print("requests- Xem yêu cầu đang chờ")
 print("exit    - Tắt server")
 print("==================\n")
 
@@ -250,15 +253,55 @@ def admin_console():
     while True:
         try:
             cmd = input().strip().lower()
-            if cmd == 'exit':
+            
+            if cmd == 'users':
+                with lock:
+                    if not clients:
+                        print("Không có client nào")
+                    else:
+                        print(f"\n--- CLIENT ({len(clients)}) ---")
+                        for conn, u in clients.items():
+                            status = f"Riêng với {private_rooms[u]}" if u in private_rooms else "Phòng chung"
+                            print(f"  • {u} - {status}")
+                        print()
+            
+            elif cmd == 'rooms':
+                with lock:
+                    public_users = [u for u in clients.values() if u not in private_rooms]
+                    private_pairs = {}
+                    for u, partner in private_rooms.items():
+                        pair = tuple(sorted([u, partner]))
+                        private_pairs[pair] = True
+                    
+                    print(f"\n--- PHÒNG ---")
+                    print(f"Chung ({len(public_users)}): {', '.join(public_users) or 'Trống'}")
+                    print(f"Riêng ({len(private_pairs)} cặp):")
+                    for u1, u2 in private_pairs.keys():
+                        print(f"  • {u1} <-> {u2}")
+                    print()
+            
+            elif cmd == 'requests':
+                with lock:
+                    if not pending_requests:
+                        print("Không có yêu cầu đang chờ\n")
+                    else:
+                        print(f"\n--- YÊU CẦU ({len(pending_requests)}) ---")
+                        for (sender, receiver), msg in pending_requests.items():
+                            print(f"  • {sender} -> {receiver}: '{msg}'")
+                        print()
+            
+            elif cmd == 'exit':
                 print("\n[Đang tắt server...]")
                 os._exit(0)
+            
             else:
                 if cmd:
-                    print("Lệnh hợp lệ: exit")
+                    print("Lệnh: users | rooms | requests | exit")
+        
         except KeyboardInterrupt:
             print("\n[Tắt server bằng Ctrl+C]")
             os._exit(0)
+
 threading.Thread(target=admin_console, daemon=True).start()
 while True:
     conn, addr = server.accept()
