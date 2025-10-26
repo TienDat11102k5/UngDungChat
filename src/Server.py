@@ -4,6 +4,7 @@ import sqlite3
 import hashlib
 import time
 import os
+import logging
 
 clients = {}
 client_states = {}  # {username: 'public' hoặc 'private'}
@@ -12,11 +13,23 @@ db_lock = threading.Lock()
 pending_requests = {}
 private_rooms = {}
 
+LOG_FILE = "server_log.txt"
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(message)s',
+    handlers=[
+        logging.FileHandler(LOG_FILE, encoding='utf-8'),
+        logging.StreamHandler()
+    ]
+)
+
+
 conn_db = sqlite3.connect("chat.db", check_same_thread=False)
 c = conn_db.cursor()
 c.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, username TEXT UNIQUE, password TEXT)")
 c.execute("CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY, username TEXT, message TEXT, timestamp TEXT)")
 conn_db.commit()
+
 
 def hash_password(pwd):
     return hashlib.sha256(pwd.encode()).hexdigest()
@@ -88,16 +101,20 @@ def handle_client(conn, addr):
     
     if choice == '1':
         if not register_user(username, password):
-            conn.send("✗ Username đã tồn tại!\n".encode('utf-8'))
-            conn.close()
-            return
+           conn.send("✗ Username đã tồn tại!\n".encode('utf-8'))
+           logging.warning(f"[ĐĂNG KÝ THẤT BẠI] {username}") 
+           conn.close()
+           return
         conn.send("✓ Đăng ký thành công!\n".encode('utf-8'))
+        logging.info(f"[ĐĂNG KÝ] {username}")  
     else:
         if not login_user(username, password):
             conn.send("✗ Sai thông tin!\n".encode('utf-8'))
+            logging.warning(f"[ĐĂNG NHẬP THẤT BẠI] {username}") 
             conn.close()
             return
         conn.send("✓ Đăng nhập thành công!\n".encode('utf-8'))
+        logging.info(f"[ĐĂNG NHẬP] {username}")
     
     with lock:
         clients[conn] = username
@@ -234,13 +251,16 @@ def handle_client(conn, addr):
             del clients[conn]
         if username in client_states:
             del client_states[username]
+    logging.info(f"[NGẮT KẾT NỐI] {username}")
     broadcast(f"[Hệ thống] {username} rời phòng".encode('utf-8'))
     conn.close()
 
 server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server.bind(("127.0.0.1", 20000))
 server.listen()
-print("Server với Compan...")
+logging.info("=" * 50)
+logging.info("SERVER BẬT - 127.0.0.1:20000")
+logging.info("=" * 50)
 
 print("\n=== LỆNH ADMIN ===")
 print("users   - Xem danh sách client")
