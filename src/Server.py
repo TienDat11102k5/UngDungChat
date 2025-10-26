@@ -71,16 +71,18 @@ def broadcast_public(sender, msg, exclude_sender=True):
                     pass
 
 
-def notify_user(username, message):
+def notify(username, msg):
+    """Gửi thông báo cho một user cụ thể"""
     with lock:
-        for conn, uname in clients.items():
-            if uname == username:
+        for c, _, u, _, _ in Client_list:
+            if u == username:
                 try:
-                    conn.send(message)
+                    c.send(f"[THÔNG BÁO] {msg}".encode('utf-8'))
                     return True
                 except:
                     pass
     return False
+
 
 def get_history(user1=None, user2=None, limit=20):
     """Lấy lịch sử chat"""
@@ -150,8 +152,7 @@ def handle_client(conn, addr):
         logging.info(f"[ĐĂNG NHẬP] {username}")
     
     with lock:
-        clients[conn] = username
-        client_states[username] = 'public'
+        Client_list.append((conn, addr, username, "public", None))
     
     conn.send("Gõ /help để xem lệnh\n".encode('utf-8'))
     broadcast(f"[Hệ thống] {username} vào phòng".encode('utf-8'))
@@ -178,10 +179,11 @@ def handle_client(conn, addr):
 """
                 conn.send(help_text.encode('utf-8'))
             
-            elif msg == '/list':
+            elif msg in ['/list', '/ls']:
                 with lock:
-                    users = [u for u in clients.values() if u != username]
-                conn.send(f"Online: {', '.join(users) if users else 'Không có'}\n".encode('utf-8'))
+                    users = [f"{u} ({'chung' if rt=='public' else f'riêng-{tg}'})"
+                        for _, _, u, rt, tg in Client_list if u != username]
+                    conn.send(f"Online ({len(users)}): {', '.join(users) if users else 'Không có'}\n".encode('utf-8'))
             
             elif msg.startswith('/msg '):
                 parts = msg.split(' ', 2)
