@@ -6,12 +6,11 @@ import time
 import os
 import logging
 
-clients = {}
-client_states = {}  # {username: 'public' hoặc 'private'}
+Client_list = []  # [(conn, addr, username, room_type, room_target)]
 lock = threading.Lock()
 db_lock = threading.Lock()
 pending_requests = {}
-private_rooms = {}
+
 
 LOG_FILE = "server_log.txt"
 logging.basicConfig(
