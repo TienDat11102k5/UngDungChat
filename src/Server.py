@@ -162,6 +162,34 @@ def update_user_state(username, new_room_type, new_room_target):
                 return True
     return False
 
+def cleanup_user(username, room_type, room_target):
+    """Dọn dẹp khi user disconnect"""
+    if room_type == "public":
+        broadcast_public("MÁY CHỦ", f"{username} đã rời phòng chung", False)
+    
+    elif room_type == "private" and room_target:
+        notify(room_target, f"{username} đã ngắt kết nối")
+        
+        # Đưa người kia về phòng chung
+        with lock:
+            for i, (c, a, u, rt, tg) in enumerate(Client_list):
+                if u == room_target and rt == "private" and tg == username:
+                    Client_list[i] = (c, a, u, "public", None)
+                    try:
+                        c.send("OK:Đã quay lại phòng chung (người kia ngắt kết nối).".encode('utf-8'))
+                        time.sleep(0.1)
+                        send_history(c, u, "public", None)
+                        time.sleep(0.1)
+                        broadcast_public("MÁY CHỦ", f"{u} đã tham gia phòng chung", False)
+                    except:
+                        pass
+                    break
+    
+    # Xóa user khỏi danh sách
+    with lock:
+        Client_list[:] = [(c, a, u, rt, tg) for c, a, u, rt, tg in Client_list if u != username]
+    
+    logging.info(f"[NGẮT KẾT NỐI] {username}")
 
 def handle_client(conn, addr):
     username = None
