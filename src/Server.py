@@ -93,6 +93,31 @@ def get_history(user1=None, user2=None, limit=20):
             c.execute("SELECT username, message, timestamp FROM messages ORDER BY id DESC LIMIT ?", (limit,))
         return list(reversed(c.fetchall()))
 
+# === Thêm hàm send_history() ở đây ===
+def send_history(conn, username, room_type, target):
+    """Gửi lịch sử chat cho user"""
+    try:
+        msgs = get_history(username, target) if room_type == "private" else get_history()
+        if msgs:
+            conn.send(f"LỊCH SỬ:=== {'CHAT với ' + target if target else 'PHÒNG CHUNG'} ===".encode('utf-8'))
+            time.sleep(0.05)
+            
+            for msg_data in msgs:
+                if room_type == "private":
+                    sender, _, txt, ts = msg_data
+                    prefix = "Bạn" if sender == username else sender
+                    conn.send(f"LỊCH SỬ:[{ts}] {prefix}: {txt}".encode('utf-8'))
+                else:
+                    uname, txt, ts = msg_data
+                    conn.send(f"LỊCH SỬ:[{ts}] {uname}: {txt}".encode('utf-8'))
+                time.sleep(0.02)
+            
+            conn.send("LỊCH SỬ:=== HẾT ===".encode('utf-8'))
+            time.sleep(0.05)
+    except Exception as e:
+        logging.error(f"[HISTORY ERROR] {e}")
+# ====================================
+
 def get_user_conn(username):
     """Lấy connection của user"""
     with lock:
