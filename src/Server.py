@@ -54,7 +54,6 @@ def login_user(username, password):
         result = c.fetchone()
     return result and result[0] == hash_password(password)
 
-
 def broadcast_public(sender, msg, exclude_sender=True):
     """Gửi tin nhắn tới tất cả người trong phòng chung"""
     with lock:
@@ -173,8 +172,12 @@ def handle_client(conn, addr):
     with lock:
         Client_list.append((conn, addr, username, "public", None))
     
-    conn.send("Gõ /help để xem lệnh\n".encode('utf-8'))
-    broadcast_public("MÁY CHỦ", f"{username} vào phòng", exclude_sender=False)
+    time.sleep(0.1)
+    send_history(conn, username, "public", None)
+    time.sleep(0.2)
+    conn.send("OK:Đã vào phòng chung. Gõ /help để xem lệnh.".encode('utf-8'))
+    time.sleep(0.1)
+    broadcast_public("MÁY CHỦ", f"{username} đã tham gia phòng chung", True)
     
     while True:
         try:
@@ -214,13 +217,11 @@ def handle_client(conn, addr):
                 message = parts[2]
                 
                 with lock:
-                    # Kiểm tra target_user có online không
                     target_exists = any(u == target_user for _, _, u, _, _ in Client_list)
                     if not target_exists:
                         conn.send(f"✗ {target_user} không online!\n".encode('utf-8'))
                         continue
                     
-                    # Kiểm tra target_user có đang chat riêng không
                     rt, _ = get_current_state(target_user)
                     if rt == 'private':
                         conn.send(f"✗ {target_user} đang chat riêng!\n".encode('utf-8'))
@@ -237,8 +238,6 @@ def handle_client(conn, addr):
                     continue
                 
                 del pending_requests[(requester, username)]
-                
-                # Cập nhật trạng thái
                 update_user_state(username, 'private', requester)
                 update_user_state(requester, 'private', username)
                 
@@ -302,7 +301,6 @@ def handle_client(conn, addr):
                     broadcast_public(username, msg, exclude_sender=True)
                 elif rt == 'private' and partner:
                     save_message(username, msg, private_to=partner)
-                    # Gửi cho partner
                     partner_conn = get_user_conn(partner)
                     if partner_conn:
                         try:
@@ -344,7 +342,6 @@ def admin_console():
                         if rt == 'private':
                             pair = tuple(sorted([u, tg]))
                             private_pairs[pair] = True
-                    
                     print(f"\n--- PHÒNG ---")
                     print(f"Chung ({len(public_users)}): {', '.join(public_users) or 'Trống'}")
                     print(f"Riêng ({len(private_pairs)} cặp):")
