@@ -284,7 +284,35 @@ def handle_client(conn, addr):
                 del pending_requests[(requester, username)]
                 conn.send(f"✓ Đã từ chối {requester}\n".encode('utf-8'))
                 notify(requester, f"{username} đã từ chối")
-
+                
+                
+            elif msg == '/back':
+                room_type, room_target = get_current_state(username)
+                if room_type == "public":
+                    conn.send("Bạn đang ở phòng chung".encode('utf-8'))
+                    continue
+                # Thông báo cho người kia
+                notify(room_target, f"{username} đã về phòng chung")
+                partner_conn = get_user_conn(room_target)
+                if partner_conn:
+                    update_user_state(room_target, "public", None)
+                    try:
+                         partner_conn.send("OK:Đã quay lại phòng chung.".encode('utf-8'))
+                         time.sleep(0.1)
+                         send_history(partner_conn, room_target, "public", None)
+                         time.sleep(0.1)
+                         broadcast_public("MÁY CHỦ", f"{room_target} đã tham gia phòng chung", True)
+                    except:
+                        pass
+                # Chuyển mình về phòng chung
+                update_user_state(username, "public", None)
+                time.sleep(0.1)
+                send_history(conn, username, "public", None)
+                time.sleep(0.2)
+                conn.send("OK:Đã quay lại phòng chung.".encode('utf-8'))
+                time.sleep(0.1)
+                broadcast_public("MÁY CHỦ", f"{username} đã tham gia phòng chung", True)
+                 
             elif msg in ['/history', '/his']:
                 rt, partner = get_current_state(username)
                 if rt == 'private' and partner:
