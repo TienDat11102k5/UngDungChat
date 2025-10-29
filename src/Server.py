@@ -162,6 +162,7 @@ def update_user_state(username, new_room_type, new_room_target):
                 return True
     return False
 
+
 def cleanup_user(username, room_type, room_target):
     """Dọn dẹp khi user disconnect"""
     if room_type == "public":
@@ -190,6 +191,7 @@ def cleanup_user(username, room_type, room_target):
         Client_list[:] = [(c, a, u, rt, tg) for c, a, u, rt, tg in Client_list if u != username]
     
     logging.info(f"[NGẮT KẾT NỐI] {username}")
+
 
 def handle_client(conn, addr):
     username = None
@@ -291,16 +293,52 @@ def handle_client(conn, addr):
 
             elif msg.startswith('/accept '):
                 requester = msg.split(' ', 1)[1]
-                if (requester, username) not in pending_requests:
-                    conn.send(f"✗ Không có yêu cầu từ {requester}!\n".encode('utf-8'))
+    
+                # 1. Kiểm tra request
+                with lock:
+                    if (requester, username) not in pending_requests:
+                        conn.send(f"Không có yêu cầu từ {requester}".encode('utf-8'))
+                        continue
+                    del pending_requests[(requester, username)]
+    
+                logging.info(f"[ACCEPT START] {username} chấp nhận {requester}")
+    
+                # 2. Lấy connection requester
+                requester_conn = get_user_conn(requester)
+                if not requester_conn:
+                    conn.send(f"Lỗi: {requester} đã offline".encode('utf-8'))
                     continue
+    
+                # 3. Lấy trạng thái hiện tại
+                room_type, _ = get_current_state(username)
+                req_room_type, _ = get_current_state(requester)
+    
+                # 4. Thông báo rời phòng chung
+                if room_type == "public":
+                    broadcast_public("MÁY CHỦ", f"{username} đã rời phòng chung", True)
+                if req_room_type == "public":
+                    broadcast_public("MÁY CHỦ", f"{requester} đã rời phòng chung", True)
+    
+                # 5. Cập nhật trạng thái
+                update_user_state(username, "private", requester)
+                update_user_state(requester, "private", username)
+    
+                # 6. Gửi cho requester
+                try:
+                    requester_conn.send(f"OK:Đã vào chat riêng với {username}. Gõ /back về phòng chung.".encode('utf-8'))
+                    time.sleep(0.1)
+                    send_history(requester_conn, requester, "private", username)
+                except Exception as e:
+                    logging.error(f"[ACCEPT ERROR] {e}")
+    
+                # 7. Gửi cho mình
+                time.sleep(0.1)
+                conn.send(f"OK:Đã vào chat riêng với {requester}. Gõ /back về phòng chung.".encode('utf-8'))
+                time.sleep(0.1)
+                send_history(conn, username, "private", requester)
+    
+                logging.info(f"[CHAT RIÊNG] {username} <-> {requester}")
 
-                del pending_requests[(requester, username)]
-                update_user_state(username, 'private', requester)
-                update_user_state(requester, 'private', username)
-
-                conn.send(f"✓ Đã chấp nhận! Chat riêng với {requester}\n".encode('utf-8'))
-                notify(requester, f"{username} đã chấp nhận yêu cầu!")
 
             elif msg.startswith('/decline '):
                 requester = msg.split(' ', 1)[1]
