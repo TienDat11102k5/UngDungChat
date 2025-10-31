@@ -246,6 +246,7 @@ def handle_client(conn, addr):
 /changepass <cũ> <mới> - Thay đổi mật khẩu
 /accept <tên> - Chấp nhận yêu cầu
 /decline <tên> - Từ chối yêu cầu
+/back - Về phòng chung
 /exit - Thoát
 ================
 """
@@ -339,16 +340,15 @@ def handle_client(conn, addr):
     
                 logging.info(f"[CHAT RIÊNG] {username} <-> {requester}")
 
-
             elif msg.startswith('/decline '):
                 requester = msg.split(' ', 1)[1]
 
                 if (requester, username) not in pending_requests:
-                    conn.send(f"✗ Không có yêu cầu từ {requester}!\n".encode('utf-8'))
+                    conn.send(f"Không có yêu cầu từ {requester}".encode('utf-8'))
                     continue
 
                 del pending_requests[(requester, username)]
-                conn.send(f"✓ Đã từ chối {requester}\n".encode('utf-8'))
+                conn.send(f"Đã từ chối {requester}".encode('utf-8'))
                 notify(requester, f"{username} đã từ chối")
                 
                 
@@ -380,10 +380,10 @@ def handle_client(conn, addr):
                 broadcast_public("MÁY CHỦ", f"{username} đã tham gia phòng chung", True)
                  
             elif msg in ['/history', '/his']:
-                rt, partner = get_current_state(username)
-                if rt == 'private' and partner:
-                    history = get_history(username, partner)
-                    conn.send(f"\n=== LỊCH SỬ CHAT với {partner} ===\n".encode('utf-8'))
+                room_type, room_target = get_current_state(username)
+                if room_type == "private" and room_target:
+                    history = get_history(username, room_target)
+                    conn.send(f"\n=== LỊCH SỬ CHAT với {room_target} ===\n".encode('utf-8'))
                     for sender, receiver, text, ts in history:
                         prefix = "Bạn" if sender == username else sender
                         conn.send(f"[{ts}] {prefix}: {text}\n".encode('utf-8'))
@@ -419,27 +419,45 @@ def handle_client(conn, addr):
                 break
 
             elif msg:
-                rt, partner = get_current_state(username)
-                if rt == 'public':
+                room_type, room_target = get_current_state(username)
+                
+                if room_type == "public":
                     save_message(username, msg)
-                    broadcast_public(username, msg, exclude_sender=True)
-                elif rt == 'private' and partner:
-                    save_message(username, msg, private_to=partner)
-                    partner_conn = get_user_conn(partner)
+                    broadcast_public(username, msg)
+                    logging.info(f"[CHUNG] {username}: {msg}")
+                
+                elif room_type == "private":
+                    save_message(username, msg, room_target)
+                    partner_conn = get_user_conn(room_target)
                     if partner_conn:
-                        try:
-                            partner_conn.send(f"[{username}] {msg}".encode('utf-8'))
-                        except:
-                            pass
-        except:
+                        partner_rt, partner_tg = get_current_state(room_target)
+                        if partner_rt == "private" and partner_tg == username:
+                            try:
+                                partner_conn.send(f"[{username}] {msg}".encode('utf-8'))
+                            except:
+                                pass
+                    logging.info(f"[RIÊNG] {username} -> {room_target}: {msg}")
+                    
+        except ConnectionResetError:
+            logging.warning(f"[NGẮT ĐỘT NGỘT] {username} - ConnectionResetError")
             break
-
-    with lock:
-        Client_list[:] = [(c, a, u, rt, tg) for c, a, u, rt, tg in Client_list if u != username]
-
-    logging.info(f"[NGẮT KẾT NỐI] {username}")
-    broadcast_public("MÁY CHỦ", f"{username} rời phòng", exclude_sender=False)
-    conn.close()
+        except BrokenPipeError:
+            logging.warning(f"[NGẮT ĐỘT NGỘT] {username} - BrokenPipeError")
+            break
+        except Exception as e:
+            logging.error(f"[LỖI] {username}: {e}")
+            break
+    
+    # Cleanup khi disconnect
+    if username:
+        final_room_type, final_room_target = get_current_state(username)
+        if final_room_type is not None:
+            cleanup_user(username, final_room_type, final_room_target)
+    
+    try:
+        conn.close()
+    except:
+        pass
 
 
 def admin_console():
@@ -453,25 +471,19 @@ def admin_console():
                         print("Không có client nào")
                     else:
                         print(f"\n--- CLIENT ({len(Client_list)}) ---")
-                        for _, _, u, rt, tg in Client_list:
-                            status = f"Riêng với {tg}" if rt == 'private' else "Phòng chung"
-                            print(f"  • {u} - {status}")
+                        for _, addr, u, rt, tg in Client_list:
+                            status = "Chung" if rt == "public" else f"Riêng với {tg}"
+                            print(f"  {u} | {addr[0]}:{addr[1]} | {status}")
                         print()
 
             elif cmd == 'rooms':
                 with lock:
-                    public_users = [u for _, _, u, rt, _ in Client_list if rt == 'public']
-                    private_pairs = {}
-                    for _, _, u, rt, tg in Client_list:
-                        if rt == 'private':
-                            pair = tuple(sorted([u, tg]))
-                            private_pairs[pair] = True
+                    public = [u for _, _, u, rt, _ in Client_list if rt == "public"]
+                    private_pairs = {tuple(sorted((u, tg))) for _, _, u, rt, tg in Client_list if rt == "private"}
+                    
                     print(f"\n--- PHÒNG ---")
-                    print(f"Chung ({len(public_users)}): {', '.join(public_users) or 'Trống'}")
-                    print(f"Riêng ({len(private_pairs)} cặp):")
-                    for u1, u2 in private_pairs.keys():
-                        print(f"  • {u1} <-> {u2}")
-                    print()
+                    print(f"Chung ({len(public)}): {', '.join(public) or 'Trống'}")
+                    print(f"Riêng ({len(private_pairs)} cặp): {', '.join([f'{a}<->{b}' for a, b in private_pairs]) or 'Không'}\n")
 
             elif cmd == 'requests':
                 with lock:
@@ -479,8 +491,8 @@ def admin_console():
                         print("Không có yêu cầu đang chờ\n")
                     else:
                         print(f"\n--- YÊU CẦU ({len(pending_requests)}) ---")
-                        for (sender, receiver), msg in pending_requests.items():
-                            print(f"  • {sender} -> {receiver}: '{msg}'")
+                        for (sender, receiver), ts in pending_requests.items():
+                            print(f"  • {sender} -> {receiver} ({int(time.time()-ts)}s trước)")
                         print()
 
             elif cmd == 'exit':
