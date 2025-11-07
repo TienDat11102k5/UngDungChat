@@ -65,7 +65,25 @@ def validate_username(username):
     if username.upper() in ['ADMIN', 'SERVER', 'SYSTEM', 'ROOT']:
         return False, "Tên tài khoản không được sử dụng từ khóa hệ thống"
     return True, ""
+def validate_password(password):
+    if not password:
+        return False, "Mật khẩu không được để trống"
+    if len(password) < MIN_PASSWORD_LENGTH:
+        return False, f"Mật khẩu phải có ít nhất {MIN_PASSWORD_LENGTH} ký tự"
+    if len(password) > MAX_PASSWORD_LENGTH:
+        return False, f"Mật khẩu không được vượt quá {MAX_PASSWORD_LENGTH} ký tự"
+    return True, ""
 
+
+def validate_message(msg):
+    if not msg or not msg.strip():
+        return False, "Tin nhắn không được để trống"
+    if len(msg) > MAX_MESSAGE_LENGTH:
+        return False, f"Tin nhắn không được vượt quá {MAX_MESSAGE_LENGTH} ký tự"
+    dangerous_chars = ['\x00', '\x01', '\x02']
+    if any(char in msg for char in dangerous_chars):
+        return False, "Tin nhắn chứa ký tự không hợp lệ"
+    return True, ""
 def save_msg(username, msg, private_to=None):
     try:
         db = sqlite3.connect(DB_FILE)
