@@ -212,6 +212,21 @@ def update_user_state(username, new_room_type, new_room_target):
                 return True
     return False
 
+def broadcast_public(sender, msg, exclude_sender=True):
+    targets = []
+    with lock:
+        for c, _, u, rt, _ in Client_list:
+            if rt == "public" and (not exclude_sender or u != sender):
+                targets.append((c, u))
+    for c, u in targets:
+        try:
+            if sender == "MÁY CHỦ":
+                c.send(f"[MÁY CHỦ] {msg}".encode('utf-8'))
+            else:
+                c.send(f"[{sender}] {msg}".encode('utf-8'))
+        except (BrokenPipeError, ConnectionResetError, OSError) as e:
+            logging.error(f"[ERROR] broadcast to {u}: {e}")
+
 def handle_client(conn, addr):
     username = None 
     try:
