@@ -5,6 +5,17 @@ import hashlib
 import sqlite3
 import logging
 import os
+import re
+
+MAX_CLIENTS = 5
+MAX_MESSAGE_LENGTH = 500
+MAX_USERNAME_LENGTH = 20
+MIN_USERNAME_LENGTH = 3
+MAX_PASSWORD_LENGTH = 50
+MIN_PASSWORD_LENGTH = 6
+USERNAME_PATTERN = re.compile(r'^[a-zA-Z0-9_]+$')
+REQUEST_TIMEOUT = 60
+SOCKET_BACKLOG = 10
 
 Client_list = []  # (conn, addr, username, room_type, room_target)
 Max_data = 1024
@@ -40,6 +51,20 @@ def db_init():
 
 def hash_pwd(pwd):
     return hashlib.sha256(pwd.encode()).hexdigest()
+
+
+def validate_username(username):
+    if not username:
+        return False, "Tên tài khoản không được để trống"
+    if len(username) < MIN_USERNAME_LENGTH:
+        return False, f"Tên tài khoản phải có ít nhất {MIN_USERNAME_LENGTH} ký tự"
+    if len(username) > MAX_USERNAME_LENGTH:
+        return False, f"Tên tài khoản không được vượt quá {MAX_USERNAME_LENGTH} ký tự"
+    if not USERNAME_PATTERN.match(username):
+        return False, "Tên tài khoản chỉ được chứa chữ, số và dấu gạch dưới"
+    if username.upper() in ['ADMIN', 'SERVER', 'SYSTEM', 'ROOT']:
+        return False, "Tên tài khoản không được sử dụng từ khóa hệ thống"
+    return True, ""
 
 def save_msg(username, msg, private_to=None):
     try:
