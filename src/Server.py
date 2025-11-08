@@ -22,6 +22,9 @@ Max_data = 1024
 Local_IP = "127.0.0.1"
 Local_Port = 20000  
 lock = threading.Lock()
+def get_client_count():
+    with lock:
+        return len(Client_list)
 pending_requests = {}  # {(sender, receiver): timestamp}
 
 DB_FILE = "chat_server.db"
@@ -229,6 +232,11 @@ def broadcast_public(sender, msg, exclude_sender=True):
 
 def handle_client(conn, addr):
     username = None 
+    if get_client_count() >= MAX_CLIENTS:
+        conn.send("LỖI:Server đã đầy. Vui lòng thử lại sau.".encode('utf-8'))
+        logging.warning(f"[TỪ CHỐI] {addr} - Server đầy ({MAX_CLIENTS} clients)")
+        conn.close()
+        return
     try:
         # === ĐĂNG NHẬP ===
         while True:
