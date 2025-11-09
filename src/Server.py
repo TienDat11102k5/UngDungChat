@@ -360,6 +360,9 @@ def handle_client(conn, addr):
             elif msg.startswith('/accept '):
                 requester = msg.split(' ', 1)[1]
                 # Kiểm tra request tồn tại
+                if (requester, username) not in pending_requests:
+                    conn.send(f"Không có yêu cầu từ {requester}...".encode('utf-8'))
+                    continue
                 with lock:
                     if (requester, username) not in pending_requests:
                         conn.send(f"Không có yêu cầu từ {requester}".encode('utf-8'))
