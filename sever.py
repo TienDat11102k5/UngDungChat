@@ -29,3 +29,24 @@ def notify(username, msg):
             return False
     return False
 Lý do: Tránh deadlock khi gửi message trong lock
+Thêm validation vào các lệnh và cải thiện error handling
+python
+# Trong handle_client():
+
+# 1. Validate username/password khi đăng nhập/đăng ký
+valid, error_msg = validate_username(username_input)
+if not valid:
+    conn.send(f"LỖI:{error_msg}".encode('utf-8'))
+    continue
+
+# 2. Validate message trong /msg
+valid, error_msg = validate_message(message)
+if not valid:
+    conn.send(f"Lỗi: {error_msg}".encode('utf-8'))
+    continue
+
+# 3. Validate trong /changepass
+valid, error_msg = validate_password(new_pass)
+if not valid:
+    conn.send(f"LỖI: {error_msg}".encode('utf-8'))
+    continue
