@@ -369,6 +369,11 @@ def handle_client(conn, addr):
                         continue
                     del pending_requests[(requester, username)]
                 logging.info(f"[ACCEPT START] {username} chấp nhận {requester}")
+                for i, (c, a, u, rt, tg) in enumerate(Client_list):
+                                if u == username:
+                                    Client_list[i] = (c, a, u, "private", requester)
+                                elif u == requester:
+                                    Client_list[i] = (c, a, u, "private", username)
                 
                 # Lấy connection của requester
                 requester_conn = get_user_conn(requester)
