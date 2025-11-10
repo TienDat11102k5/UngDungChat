@@ -49,6 +49,9 @@ def recv_message(conn):
             raw_msglen += chunk
 
         msg_length = struct.unpack('!I', raw_msglen)[0]
+        if msg_length > 10*1024*1024:  # 10 MB
+            print(f"\n[CẢNH BÁO] Tin nhắn quá lớn: {msg_length} bytes")
+            return None
         msg_data = b''
 
         while len(msg_data) < msg_length:
@@ -56,8 +59,14 @@ def recv_message(conn):
             if not chunk:
                 return None
             msg_data += chunk
-
+            
         return msg_data.decode('utf-8')
+    except struct.error:
+        print("\n[LỖI] Lỗi đọc header tin nhắn")
+        return None
+    except UnicodeDecodeError:
+        print("\n[LỖI] Lỗi decode UTF-8")
+        return None
     except Exception as e:
         logging.error(f"[RECV ERROR] {e}")
         return None
@@ -156,8 +165,10 @@ def send_messages():
                 break
             
             if message.strip():
-                client_socket.send(message.encode('utf-8'))
-                
+                if not send_message(client_socket, message):
+                     running = False
+                     break
+
                 if message.strip() == '/exit':
                     running = False
                     break
