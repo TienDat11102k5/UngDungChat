@@ -2,6 +2,9 @@ import socket
 import threading
 import sys
 import os
+import struct
+import logging
+
 
 SERVER_IP = "127.0.0.1"
 SERVER_PORT = 20000
@@ -19,6 +22,45 @@ def clear_screen():
 def print_separator():
     """In dòng phân cách"""
     print("=" * 60)
+    
+def send_message(conn, msg):
+    """Gửi tin nhắn với header chứa độ dài (4 bytes)"""
+    try:
+        msg_bytes = msg.encode('utf-8')
+        msg_length = len(msg_bytes)
+        conn.sendall(struct.pack('!I', msg_length) + msg_bytes)
+        return True
+    except (BrokenPipeError, ConnectionResetError, OSError) as e:
+        logging.error(f"[SEND ERROR] {e}")
+        return False
+    except Exception as e:
+        logging.error(f"[SEND ERROR] {e}")
+        return False
+
+
+def recv_message(conn):
+    """Nhận tin nhắn với header chứa độ dài (4 bytes)"""
+    try:
+        raw_msglen = b''
+        while len(raw_msglen) < 4:
+            chunk = conn.recv(4 - len(raw_msglen))
+            if not chunk:
+                return None
+            raw_msglen += chunk
+
+        msg_length = struct.unpack('!I', raw_msglen)[0]
+        msg_data = b''
+
+        while len(msg_data) < msg_length:
+            chunk = conn.recv(min(msg_length - len(msg_data), MAX_DATA))
+            if not chunk:
+                return None
+            msg_data += chunk
+
+        return msg_data.decode('utf-8')
+    except Exception as e:
+        logging.error(f"[RECV ERROR] {e}")
+        return None
 
 def receive_messages():
     """Thread nhận tin nhắn từ server"""
@@ -26,13 +68,12 @@ def receive_messages():
     
     while running:
         try:
-            data = client_socket.recv(MAX_DATA)
-            if not data:
+            message = recv_message(client_socket)
+            
+            if message is None:
                 print("\n[HỆ THỐNG] Mất kết nối với server")
                 running = False
                 break
-            
-            message = data.decode('utf-8')
             
             # Xử lý các loại message khác nhau
             if message.startswith("XÁC THỰC:"):
