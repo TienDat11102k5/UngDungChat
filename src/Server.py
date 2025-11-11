@@ -6,6 +6,7 @@ import sqlite3
 import logging
 import os
 import re
+import struct
 
 MAX_CLIENTS = 5
 MAX_MESSAGE_LENGTH = 500
@@ -39,7 +40,51 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
+def send_message(conn, msg):
+    """Gửi tin nhắn với header chứa độ dài (4 bytes)"""
+    try:
+        msg_bytes = msg.encode('utf-8')
+        msg_length = len(msg_bytes)
+        conn.sendall(struct.pack('!I', msg_length) + msg_bytes)
+        return True
+    except (BrokenPipeError, ConnectionResetError, OSError) as e:
+        logging.error(f"[SEND ERROR] {e}")
+        return False
+    except Exception as e:
+        logging.error(f"[SEND ERROR] {e}")
+        return False
 
+def recv_message(conn):
+    """Nhận tin nhắn với header chứa độ dài (4 bytes)"""
+    try:
+        raw_msglen = b''
+        while len(raw_msglen) < 4:
+            chunk = conn.recv(4 - len(raw_msglen))
+            if not chunk:
+                return None 
+            raw_msglen += chunk
+        
+        msg_length = struct.unpack('!I', raw_msglen)[0]
+        if msg_length > MAX_MESSAGE_LENGTH * 2:
+            logging.warning(f"[RECV] Tin nhắn quá lớn: {msg_length} bytes")
+            return None
+        msg_data = b''
+        while len(msg_data) < msg_length:
+            chunk = conn.recv(min(msg_length - len(msg_data), Max_data))
+            if not chunk:
+                return None
+            msg_data += chunk
+        
+        return msg_data.decode('utf-8')
+    except struct.error:
+        logging.error("[RECV] Lỗi unpack header")
+        return None
+    except UnicodeDecodeError:
+        logging.error("[RECV] Lỗi decode UTF-8")
+        return None
+    except Exception as e:
+        logging.error(f"[RECV ERROR] {e}")
+        return None
 def db_init():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
