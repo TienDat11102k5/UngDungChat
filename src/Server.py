@@ -8,6 +8,7 @@ import os
 import re
 import struct
 
+# === CẤU HÌNH GIỚI HẠN ===
 MAX_CLIENTS = 5
 MAX_MESSAGE_LENGTH = 500
 MAX_USERNAME_LENGTH = 20
@@ -17,21 +18,19 @@ MIN_PASSWORD_LENGTH = 6
 USERNAME_PATTERN = re.compile(r'^[a-zA-Z0-9_]+$')
 REQUEST_TIMEOUT = 60
 SOCKET_BACKLOG = 10
+AUTH_TIMEOUT = 60 
+CHAT_TIMEOUT = 600
 
-Client_list = []  # (conn, addr, username, room_type, room_target)
+Client_list = [] # conn, addr, username, room_type, room_target
 Max_data = 1024
 Local_IP = "127.0.0.1"
 Local_Port = 20000  
 lock = threading.Lock()
-def get_client_count():
-    with lock:
-        return len(Client_list)
-pending_requests = {}  # {(sender, receiver): timestamp}
+pending_requests = {}
 
 DB_FILE = "chat_server.db"
 LOG_FILE = "server_log.txt"
 
-# Logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(message)s',
@@ -85,6 +84,7 @@ def recv_message(conn):
     except Exception as e:
         logging.error(f"[RECV ERROR] {e}")
         return None
+
 def db_init():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -100,7 +100,6 @@ def db_init():
 def hash_pwd(pwd):
     return hashlib.sha256(pwd.encode()).hexdigest()
 
-
 def validate_username(username):
     if not username:
         return False, "Tên tài khoản không được để trống"
@@ -113,6 +112,7 @@ def validate_username(username):
     if username.upper() in ['ADMIN', 'SERVER', 'SYSTEM', 'ROOT']:
         return False, "Tên tài khoản không được sử dụng từ khóa hệ thống"
     return True, ""
+
 def validate_password(password):
     if not password:
         return False, "Mật khẩu không được để trống"
@@ -121,7 +121,6 @@ def validate_password(password):
     if len(password) > MAX_PASSWORD_LENGTH:
         return False, f"Mật khẩu không được vượt quá {MAX_PASSWORD_LENGTH} ký tự"
     return True, ""
-
 
 def validate_message(msg):
     if not msg or not msg.strip():
@@ -132,6 +131,35 @@ def validate_message(msg):
     if any(char in msg for char in dangerous_chars):
         return False, "Tin nhắn chứa ký tự không hợp lệ"
     return True, ""
+
+def get_client_count():
+    with lock:
+        return len(Client_list)
+
+def cleanup_expired_requests():
+    current_time = time.time()
+    expired = []
+    
+    with lock:
+        for (sender, receiver), timestamp in list(pending_requests.items()):
+            if current_time - timestamp > REQUEST_TIMEOUT:
+                expired.append((sender, receiver))
+        
+        for sender, receiver in expired:
+            del pending_requests[(sender, receiver)]
+    
+    for sender, receiver in expired:
+        notify_result = notify(sender, f"Yêu cầu chat với {receiver} đã hết hạn ({REQUEST_TIMEOUT}s)")
+        if notify_result:
+            logging.info(f"[HẾT HẠN] {sender} -> {receiver} (đã thông báo người gửi)")
+        else:
+            logging.info(f"[HẾT HẠN] {sender} -> {receiver} (người gửi offline)")
+        notify_result = notify(receiver, f"Yêu cầu chat từ {sender} đã hết hạn ({REQUEST_TIMEOUT}s)")
+        if not notify_result:
+            logging.info(f"[HẾT HẠN] Không thể thông báo cho {receiver} (offline)")
+    
+    return len(expired)
+
 def save_msg(username, msg, private_to=None):
     try:
         db = sqlite3.connect(DB_FILE)
@@ -146,7 +174,7 @@ def save_msg(username, msg, private_to=None):
         db.commit()
         db.close()
     except Exception as e:
-        logging.error(f"[DB ERROR] {e}")
+        logging.error(f"[DB ERROR] save_msg: {e}")
 
 def get_history(user1=None, user2=None, limit=50):
     try:
@@ -160,104 +188,40 @@ def get_history(user1=None, user2=None, limit=50):
         msgs = c.fetchall()
         db.close()
         return list(reversed(msgs))
-    except:
+    except Exception as e:
+        logging.error(f"[DB ERROR] get_history: {e}")
         return []
 
 def send_history(conn, username, room_type, target):
     try:
         msgs = get_history(username, target) if room_type == "private" else get_history()
         if msgs:
-            conn.send(f"LỊCH SỬ:=== {'CHAT với ' + target if target else 'PHÒNG CHUNG'} ===".encode('utf-8'))
+            send_message(conn, f"LỊCH SỬ:=== {'CHAT với ' + target if target else 'PHÒNG CHUNG'} ===")
             time.sleep(0.05)
             for msg_data in msgs:
                 if room_type == "private":
                     sender, _, txt, ts = msg_data
                     prefix = "Bạn" if sender == username else sender
-                    conn.send(f"LỊCH SỬ:[{ts}] {prefix}: {txt}".encode('utf-8'))
+                    send_message(conn, f"LỊCH SỬ:[{ts}] {prefix}: {txt}")
                 else:
                     uname, txt, ts = msg_data
-                    conn.send(f"LỊCH SỬ:[{ts}] {uname}: {txt}".encode('utf-8'))
+                    send_message(conn, f"LỊCH SỬ:[{ts}] {uname}: {txt}")
                 time.sleep(0.02)
-            conn.send("LỊCH SỬ:=== HẾT ===".encode('utf-8'))
+            send_message(conn, "LỊCH SỬ:=== HẾT ===")
             time.sleep(0.05)
-    except:
-        pass
+    except Exception as e:
+        logging.error(f"[ERROR] send_history: {e}")
 
 def notify(username, msg):
-    """Gửi thông báo cho một user cụ thể"""
+    target_conn = None
     with lock:
         for c, _, u, _, _ in Client_list:
             if u == username:
-                try:
-                    c.send(f"[THÔNG BÁO] {msg}".encode('utf-8'))
-                    return True
-                except:
-                    pass
-    return False
-
-def broadcast_public(sender, msg, exclude_sender=True):
-    """Gửi tin nhắn tới tất cả người trong phòng chung"""
-    with lock:
-        for c, _, u, rt, _ in Client_list:
-            if rt == "public" and (not exclude_sender or u != sender):
-                try:
-                    if sender == "MÁY CHỦ":
-                        c.send(f"[MÁY CHỦ] {msg}".encode('utf-8'))
-                    else:
-                        c.send(f"[{sender}] {msg}".encode('utf-8'))
-                except:
-                    pass
-
-def cleanup_user(username, room_type, room_target):
-    """Dọn dẹp khi user disconnect"""
-    if room_type == "public":
-        broadcast_public("MÁY CHỦ", f"{username} đã rời phòng chung", False)
-    elif room_type == "private" and room_target:
-        notify(room_target, f"{username} đã ngắt kết nối")
-        # Đưa người kia về phòng chung
-        with lock:
-            for i, (c, a, u, rt, tg) in enumerate(Client_list):
-                if u == room_target and rt == "private" and tg == username:
-                    Client_list[i] = (c, a, u, "public", None)
-                    try:
-                        c.send("OK:Đã quay lại phòng chung (người kia ngắt kết nối).".encode('utf-8'))
-                        time.sleep(0.1)
-                        send_history(c, u, "public", None)
-                        time.sleep(0.1)
-                        broadcast_public("MÁY CHỦ", f"{u} đã tham gia phòng chung", False)
-                    except:
-                        pass
-                    break
+                target_conn = c
+                break
     
-    # Xóa user khỏi danh sách
-    with lock:
-        Client_list[:] = [(c, a, u, rt, tg) for c, a, u, rt, tg in Client_list if u != username]
-    logging.info(f"[NGẮT KẾT NỐI] {username}")
-
-def get_user_conn(username):
-    """Lấy connection của user"""
-    with lock:
-        for c, _, u, _, _ in Client_list:
-            if u == username:
-                return c
-    return None
-
-def get_current_state(username):
-    """Lấy (room_type, room_target) mới nhất của user từ Client_list."""
-    with lock:
-        for _, _, u, rt, tg in Client_list:
-            if u == username:
-                return rt, tg
-    return None, None
-
-def update_user_state(username, new_room_type, new_room_target):
-    """Cập nhật trạng thái của user trong Client_list"""
-    with lock:
-        for i, (c, a, u, rt, tg) in enumerate(Client_list):
-            if u == username:
-                Client_list[i] = (c, a, u, new_room_type, new_room_target)
-                logging.info(f"[CẬP NHẬT] {username}: {rt}/{tg} -> {new_room_type}/{new_room_target}")
-                return True
+    if target_conn:
+        return send_message(target_conn, f"[THÔNG BÁO] {msg}")
     return False
 
 def broadcast_public(sender, msg, exclude_sender=True):
@@ -266,38 +230,109 @@ def broadcast_public(sender, msg, exclude_sender=True):
         for c, _, u, rt, _ in Client_list:
             if rt == "public" and (not exclude_sender or u != sender):
                 targets.append((c, u))
+    
     for c, u in targets:
-        try:
-            if sender == "MÁY CHỦ":
-                c.send(f"[MÁY CHỦ] {msg}".encode('utf-8'))
-            else:
-                c.send(f"[{sender}] {msg}".encode('utf-8'))
-        except (BrokenPipeError, ConnectionResetError, OSError) as e:
-            logging.error(f"[ERROR] broadcast to {u}: {e}")
+        if sender == "MÁY CHỦ":
+            send_message(c, f"[MÁY CHỦ] {msg}")
+        else:
+            send_message(c, f"[{sender}] {msg}")
+
+def cleanup_user(username, room_type, room_target):
+    if room_type == "public":
+        broadcast_public("MÁY CHỦ", f"{username} đã rời phòng chung", False)
+    elif room_type == "private" and room_target:
+        notify(room_target, f"{username} đã ngắt kết nối")
+        partner_conn = None
+        partner_username = None
+        with lock:
+            for i, (c, a, u, rt, tg) in enumerate(Client_list):
+                if u == room_target and rt == "private" and tg == username:
+                    partner_conn = c
+                    partner_username = u
+                    Client_list[i] = (c, a, u, "public", None)
+                    break
+        if partner_conn and partner_username:
+            try:
+                send_message(partner_conn, "OK:Đã quay lại phòng chung (người kia ngắt kết nối).")
+                time.sleep(0.1)
+                send_history(partner_conn, partner_username, "public", None)
+                time.sleep(0.1)
+                broadcast_public("MÁY CHỦ", f"{partner_username} đã tham gia phòng chung", False)
+            except Exception as e:
+                logging.error(f"[ERROR] cleanup_user notify: {e}")
+    
+    with lock:
+        Client_list[:] = [(c, a, u, rt, tg) for c, a, u, rt, tg in Client_list if u != username]
+    logging.info(f"[NGẮT KẾT NỐI] {username}")
+
+def get_user_conn(username):
+    with lock:
+        for c, _, u, _, _ in Client_list:
+            if u == username:
+                return c
+    return None
+
+def get_current_state(username):
+    with lock:
+        for _, _, u, rt, tg in Client_list:
+            if u == username:
+                return rt, tg
+    return None, None
+
+def update_user_state(username, new_room_type, new_room_target):
+    with lock:
+        for i, (c, a, u, rt, tg) in enumerate(Client_list):
+            if u == username:
+                Client_list[i] = (c, a, u, new_room_type, new_room_target)
+                logging.info(f"[CẬP NHẬT] {username}: {rt}/{tg} -> {new_room_type}/{new_room_target}")
+                return True
+    return False
 
 def handle_client(conn, addr):
     username = None 
-    if get_client_count() >= MAX_CLIENTS:
-        conn.send("LỖI:Server đã đầy. Vui lòng thử lại sau.".encode('utf-8'))
-        logging.warning(f"[TỪ CHỐI] {addr} - Server đầy ({MAX_CLIENTS} clients)")
-        conn.close()
-        return
     try:
-        # === ĐĂNG NHẬP ===
+        conn.settimeout(AUTH_TIMEOUT)
+        
+        if get_client_count() >= MAX_CLIENTS:
+            send_message(conn, "LỖI:Server đã đầy. Vui lòng thử lại sau.")
+            logging.warning(f"[TỪ CHỐI] {addr} - Server đầy ({MAX_CLIENTS} clients)")
+            return
+    
         while True:
-            conn.send("XÁC THỰC:DANGNHAP hoặc DANGKY?".encode('utf-8'))
-            auth_type = conn.recv(Max_data).decode('utf-8').strip().upper()
-            if not auth_type or auth_type == "THOAT":
+            send_message(conn, "XÁC THỰC:DANGNHAP hoặc DANGKY?")
+            auth_type = recv_message(conn)
+            if not auth_type:
+                return
+            auth_type = auth_type.strip().upper()
+            if auth_type == "THOAT":
                 return
             if auth_type in ["DANGNHAP", "DANGKY"]:
-                conn.send(f"{auth_type}:Nhập tên tài khoản".encode('utf-8'))
-                username_input = conn.recv(Max_data).decode('utf-8').strip()
-                if not username_input or username_input.upper() == "BACK":
+                send_message(conn, f"{auth_type}:Nhập tên tài khoản")
+                username_input = recv_message(conn)
+                if not username_input:
+                    return
+                username_input = username_input.strip()
+                if username_input.upper() == "BACK":
                     continue
-                conn.send(f"{auth_type}:Nhập mật khẩu".encode('utf-8'))
-                password = conn.recv(Max_data).decode('utf-8').strip()
-                if not password or password.upper() == "BACK":
+                
+                valid, error_msg = validate_username(username_input)
+                if not valid:
+                    send_message(conn, f"LỖI:{error_msg}")
                     continue
+                
+                send_message(conn, f"{auth_type}:Nhập mật khẩu")
+                password = recv_message(conn)
+                if not password:
+                    return
+                password = password.strip()
+                if password.upper() == "BACK":
+                    continue
+                
+                valid, error_msg = validate_password(password)
+                if not valid:
+                    send_message(conn, f"LỖI:{error_msg}")
+                    continue
+                
                 db = sqlite3.connect(DB_FILE)
                 c = db.cursor()
                 if auth_type == "DANGKY":
@@ -305,78 +340,101 @@ def handle_client(conn, addr):
                         c.execute("INSERT INTO users VALUES (NULL, ?, ?, ?)", 
                                   (username_input, hash_pwd(password), time.strftime('%Y-%m-%d %H:%M:%S')))
                         db.commit()
-                        conn.send(f"OK:Tài khoản '{username_input}' đã tạo!".encode('utf-8'))
+                        send_message(conn, f"OK:Tài khoản '{username_input}' đã tạo!")
                         logging.info(f"[ĐĂNG KÝ] {username_input}")
                     except sqlite3.IntegrityError:
-                        conn.send("LỖI:Tên tài khoản đã tồn tại".encode('utf-8'))
+                        send_message(conn, "LỖI:Tên tài khoản đã tồn tại")
+                    except Exception as e:
+                        send_message(conn, "LỖI:Lỗi tạo tài khoản")
+                        logging.error(f"[DB ERROR] Register: {e}")
                     db.close()
                     continue
-                else:  # ĐĂNG NHẬP
+                else:
                     c.execute("SELECT password_hash FROM users WHERE username=?", (username_input,))
                     result = c.fetchone()
                     db.close()
                     if not result:
-                        conn.send("LỖI:Tài khoản không tồn tại".encode('utf-8'))
+                        send_message(conn, "LỖI:Tài khoản không tồn tại")
                         continue
                     if result[0] != hash_pwd(password):
-                        conn.send("LỖI:Sai mật khẩu".encode('utf-8'))
+                        send_message(conn, "LỖI:Sai mật khẩu")
                         continue
                     with lock:
                         if any(u == username_input for _, _, u, _, _ in Client_list):
-                            conn.send("LỖI:Tài khoản đã đăng nhập".encode('utf-8'))
+                            send_message(conn, "LỖI:Tài khoản đã đăng nhập")
                             continue 
                     username = username_input
-                    conn.send(f"OK:Chào mừng {username}!".encode('utf-8'))
-                    logging.info(f"[ĐĂNG NHẬP] {username}")
+                    send_message(conn, f"OK:Chào mừng {username}!")
+                    logging.info(f"[ĐĂNG NHẬP] {username} từ {addr[0]}")
                     break
         
-        # === TỰ ĐỘNG VÀO PHÒNG CHUNG ===
+        conn.settimeout(CHAT_TIMEOUT)
         with lock:
             Client_list.append((conn, addr, username, "public", None))
         time.sleep(0.1)
         send_history(conn, username, "public", None)
         time.sleep(0.2)
-        conn.send("OK:Đã vào phòng chung. Gõ /help để xem lệnh.".encode('utf-8'))
+        send_message(conn, "OK:Đã vào phòng chung. Gõ /help để xem lệnh.")
         time.sleep(0.1)
         broadcast_public("MÁY CHỦ", f"{username} đã tham gia phòng chung", True)
-        # === VÒNG LẶP CHAT ===
+        
         while True:
-            data = conn.recv(Max_data)   
-            if not data:
+            msg = recv_message(conn)
+            if not msg:
                 logging.warning(f"[NGẮT ĐỘT NGỘT] {username} - connection closed")
-                break 
-            msg = data.decode('utf-8').strip()
+                break
+            msg = msg.strip()
             if not msg:
                 continue
-            # Lấy trạng thái mới nhất
+            
             room_type, room_target = get_current_state(username)
             if room_type is None:
                 break
-            # === XỬ LÝ LỆNH ===
+            
             if msg == '/help':
-                conn.send("""
-=== LỆNH ===
-/list, /ls - Danh sách online
-/msg <tên> <tin> - Yêu cầu chat riêng
-/accept <tên> - Chấp nhận
-/decline <tên> - Từ chối
-/back - Về phòng chung
-/history, /his - Xem lịch sử
-/changepass <cũ> <mới> - Đổi pass
-/exit - Thoát
-""".encode('utf-8'))
+                help_lines = [
+                    "=== LỆNH ===",
+                    "/list, /ls - Danh sách online",
+                    f"/msg <tên> <tin> - Yêu cầu chat riêng (hết hạn sau {REQUEST_TIMEOUT}s)",
+                    "/accept <tên> - Chấp nhận",
+                    "/decline <tên> - Từ chối",
+                    "/back - Về phòng chung",
+                    "/history, /his - Xem lịch sử",
+                    "/changepass <cũ> <mới> - Đổi pass",
+                    "/exit - Thoát",
+                    "",
+                    "=== GIỚI HẠN ===",
+                    f"- Tin nhắn: tối đa {MAX_MESSAGE_LENGTH} ký tự",
+                    f"- Username: {MIN_USERNAME_LENGTH}-{MAX_USERNAME_LENGTH} ký tự (chữ, số, _)",
+                    f"- Password: {MIN_PASSWORD_LENGTH}-{MAX_PASSWORD_LENGTH} ký tự",
+                    f"- Yêu cầu chat: tự động hủy sau {REQUEST_TIMEOUT} giây"
+                ]
+                for line in help_lines:
+                    send_message(conn, line)
+                    time.sleep(0.01)
             
             elif msg in ['/list', '/ls']:
                 with lock:
                     users = [f"{u} ({'chung' if rt=='public' else f'riêng-{tg}'})" 
                              for _, _, u, rt, tg in Client_list if u != username]
-                conn.send(f"Online ({len(users)}): {', '.join(users) if users else 'Không có'}".encode('utf-8'))  
+                send_message(conn, f"Online ({len(users)}/{MAX_CLIENTS}): {', '.join(users) if users else 'Không có'}")
+            
             elif msg.startswith('/msg '):
                 parts = msg.split(' ', 2)
                 if len(parts) < 3:
-                    conn.send("Cách dùng: /msg <tên> <tin>".encode('utf-8'))
+                    send_message(conn, "Cách dùng: /msg <tên> <tin>")
                     continue
                 target, message = parts[1], parts[2]
+                
+                valid, error_msg = validate_message(message)
+                if not valid:
+                    send_message(conn, f"Lỗi: {error_msg}")
+                    continue
+                
+                valid, error_msg = validate_username(target)
+                if not valid:
+                    send_message(conn, f"Lỗi: Tên người nhận không hợp lệ")
+                    continue
                 
                 with lock:
                     target_exists = False
@@ -388,69 +446,80 @@ def handle_client(conn, addr):
                                 target_in_private = True
                             break
                     if target == username:
-                        conn.send("Không thể gửi yêu cầu chat riêng cho chính mình".encode('utf-8'))
+                        send_message(conn, "Không thể gửi yêu cầu chat riêng cho chính mình")
                         continue
                     if not target_exists:
-                        conn.send(f"Lỗi: {target} không online".encode('utf-8'))
+                        send_message(conn, f"Lỗi: {target} không online")
                         continue
                     if target_in_private:
-                        conn.send(f"Lỗi: {target} đang chat riêng".encode('utf-8'))
+                        send_message(conn, f"Lỗi: {target} đang chat riêng")
                         continue
                     pending_requests[(username, target)] = time.time()
                 
-                notify(target, f"{username} muốn chat riêng: '{message}'\nGõ /accept {username} hoặc /decline {username}")
-                conn.send(f"Đã gửi yêu cầu tới {target}".encode('utf-8'))
+                notify(target, f"{username} muốn chat riêng: '{message[:50]}...'\nGõ /accept {username} hoặc /decline {username} (hết hạn sau {REQUEST_TIMEOUT}s)")
+                send_message(conn, f"Đã gửi yêu cầu tới {target} (hết hạn sau {REQUEST_TIMEOUT}s)")
                 logging.info(f"[YÊU CẦU] {username} -> {target}")
             
             elif msg.startswith('/accept '):
                 requester = msg.split(' ', 1)[1]
-                # Kiểm tra request tồn tại
-                if (requester, username) not in pending_requests:
-                    conn.send(f"Không có yêu cầu từ {requester}...".encode('utf-8'))
+                
+                valid, _ = validate_username(requester)
+                if not valid:
+                    send_message(conn, f"Tên không hợp lệ")
                     continue
+                
+                cleanup_expired_requests()
+                
+                requester_conn = None
+                requester_room_type = None
+                accepter_room_type = None
+                
                 with lock:
                     if (requester, username) not in pending_requests:
-                        conn.send(f"Không có yêu cầu từ {requester}".encode('utf-8'))
+                        send_message(conn, f"Không có yêu cầu từ {requester} (có thể đã hết hạn)")
                         continue
+                    
+                    requester_found = False
+                    for i, (c, a, u, rt, tg) in enumerate(Client_list):
+                        if u == requester:
+                            requester_conn = c
+                            requester_room_type = rt
+                            requester_found = True
+                            break
+                    
+                    if not requester_found:
+                        send_message(conn, f"Lỗi: {requester} đã offline")
+                        del pending_requests[(requester, username)]
+                        continue
+                    
+                    for i, (c, a, u, rt, tg) in enumerate(Client_list):
+                        if u == username:
+                            accepter_room_type = rt
+                            break
+                    
                     del pending_requests[(requester, username)]
-                logging.info(f"[ACCEPT START] {username} chấp nhận {requester}")
-                for i, (c, a, u, rt, tg) in enumerate(Client_list):
-                                if u == username:
-                                    Client_list[i] = (c, a, u, "private", requester)
-                                elif u == requester:
-                                    Client_list[i] = (c, a, u, "private", username)
+                    
+                    for i, (c, a, u, rt, tg) in enumerate(Client_list):
+                        if u == username:
+                            Client_list[i] = (c, a, u, "private", requester)
+                        elif u == requester:
+                            Client_list[i] = (c, a, u, "private", username)
                 
-                # Lấy connection của requester
-                requester_conn = get_user_conn(requester)
-                if not requester_conn:
-                    conn.send(f"Lỗi: {requester} đã offline".encode('utf-8'))
-                    continue
+                logging.info(f"[ACCEPT] {username} chấp nhận {requester}")
                 
-                # 1. Thông báo rời phòng chung (nếu đang ở đó)
-                if room_type == "public":
+                if accepter_room_type == "public":
                     broadcast_public("MÁY CHỦ", f"{username} đã rời phòng chung", True)
                 
-                # 2. Cập nhật trạng thái người accept (username)
-                update_user_state(username, "private", requester)
-                
-                # 3. Kiểm tra và cập nhật trạng thái requester
-                req_room_type, _ = get_current_state(requester)
-                if req_room_type == "public":
+                if requester_room_type == "public":
                     broadcast_public("MÁY CHỦ", f"{requester} đã rời phòng chung", True)
                 
-                update_user_state(requester, "private", username)
-                
-                # 4. Gửi thông báo cho requester
-                try:
-                    requester_conn.send(f"OK:Đã vào chat riêng với {username}. Gõ /back về phòng chung.".encode('utf-8'))
+                if requester_conn:
+                    send_message(requester_conn, f"OK:Đã vào chat riêng với {username}. Gõ /back về phòng chung.")
                     time.sleep(0.1)
                     send_history(requester_conn, requester, "private", username)
-                except Exception as e:
-                    logging.error(f"[ACCEPT ERROR] Gửi cho {requester}: {e}")
                 
-                # 5. Gửi thông báo cho mình
                 time.sleep(0.1)
-                conn.send(f"OK:Đã vào chat riêng với {requester}. Gõ /back về phòng chung.".encode('utf-8'))
+                send_message(conn, f"OK:Đã vào chat riêng với {requester}. Gõ /back về phòng chung.")
                 time.sleep(0.1)
                 send_history(conn, username, "private", requester)
                 
@@ -458,43 +527,59 @@ def handle_client(conn, addr):
             
             elif msg.startswith('/decline '):
                 requester = msg.split(' ', 1)[1]
+                
+                valid, _ = validate_username(requester)
+                if not valid:
+                    send_message(conn, f"Tên không hợp lệ")
+                    continue
+                
+                cleanup_expired_requests()
+                
                 with lock:
                     if (requester, username) not in pending_requests:
-                        conn.send(f"Không có yêu cầu từ {requester}".encode('utf-8'))
+                        send_message(conn, f"Không có yêu cầu từ {requester} (có thể đã hết hạn)")
                         continue
                     del pending_requests[(requester, username)]
-                conn.send(f"Đã từ chối {requester}".encode('utf-8'))
+                send_message(conn, f"Đã từ chối {requester}")
                 notify(requester, f"{username} đã từ chối")
+                logging.info(f"[TỪ CHỐI] {username} từ chối {requester}")
             
             elif msg == '/back':
                 if room_type == "public":
-                    conn.send("Bạn đang ở phòng chung".encode('utf-8'))
+                    send_message(conn, "Bạn đang ở phòng chung")
                     continue
                 
-                # Thông báo cho người kia
-                notify(room_target, f"{username} đã về phòng chung")
+                partner_conn = None
+                partner_username = None
                 
-                # Chuyển người kia về phòng chung
-                partner_conn = get_user_conn(room_target)
-                if partner_conn:
-                    update_user_state(room_target, "public", None)
-                    try:
-                        partner_conn.send("OK:Đã quay lại phòng chung.".encode('utf-8'))
-                        time.sleep(0.1)
-                        send_history(partner_conn, room_target, "public", None)
-                        time.sleep(0.1)
-                        broadcast_public("MÁY CHỦ", f"{room_target} đã tham gia phòng chung", True)
-                    except:
-                        pass
+                with lock:
+                    for i, (c, a, u, rt, tg) in enumerate(Client_list):
+                        if u == room_target and rt == "private" and tg == username:
+                            partner_conn = c
+                            partner_username = u
+                            Client_list[i] = (c, a, u, "public", None)
+                        elif u == username:
+                            Client_list[i] = (c, a, u, "public", None)
                 
-                # Chuyển mình về phòng chung
-                update_user_state(username, "public", None)
+                if partner_conn and partner_username:
+                    send_message(partner_conn, "OK:Đã quay lại phòng chung.")
+                    time.sleep(0.1)
+                    send_history(partner_conn, partner_username, "public", None)
+                    time.sleep(0.1)
+                    broadcast_public("MÁY CHỦ", f"{partner_username} đã tham gia phòng chung", True)
+                
+                if room_target:
+                    notify(room_target, f"{username} đã về phòng chung")
+                
                 time.sleep(0.1)
                 send_history(conn, username, "public", None)
                 time.sleep(0.2)
-                conn.send("OK:Đã quay lại phòng chung.".encode('utf-8'))
+                send_message(conn, "OK:Đã quay lại phòng chung.")
+                
                 time.sleep(0.1)
                 broadcast_public("MÁY CHỦ", f"{username} đã tham gia phòng chung", True)
+                
+                logging.info(f"[/BACK] {username} và {partner_username if partner_username else 'N/A'} về phòng chung")
             
             elif msg in ['/history', '/his']:
                 send_history(conn, username, room_type, room_target)
@@ -502,48 +587,62 @@ def handle_client(conn, addr):
             elif msg.startswith('/changepass '):
                 parts = msg.split(' ')
                 if len(parts) != 3:
-                    conn.send("Cách dùng: /changepass <cũ> <mới>".encode('utf-8'))
+                    send_message(conn, "Cách dùng: /changepass <cũ> <mới>")
                     continue
+                
+                old_pass, new_pass = parts[1], parts[2]
+                
+                valid, error_msg = validate_password(new_pass)
+                if not valid:
+                    send_message(conn, f"LỖI: {error_msg}")
+                    continue
+                
                 db = sqlite3.connect(DB_FILE)
                 c = db.cursor()
                 c.execute("SELECT password_hash FROM users WHERE username=?", (username,))
-                if c.fetchone()[0] == hash_pwd(parts[1]):
-                    c.execute("UPDATE users SET password_hash=? WHERE username=?", (hash_pwd(parts[2]), username))
+                if c.fetchone()[0] == hash_pwd(old_pass):
+                    c.execute("UPDATE users SET password_hash=? WHERE username=?", (hash_pwd(new_pass), username))
                     db.commit()
-                    conn.send("Đổi mật khẩu thành công!".encode('utf-8'))
+                    send_message(conn, "Đổi mật khẩu thành công!")
                     logging.info(f"[ĐỔI PASS] {username}")
                 else:
-                    conn.send("LỖI: Sai mật khẩu cũ".encode('utf-8'))
+                    send_message(conn, "LỖI: Sai mật khẩu cũ")
                 db.close()
             
             elif msg == '/exit':
-                conn.send("Tạm biệt!".encode('utf-8'))
+                send_message(conn, "Tạm biệt!")
                 break
             
             else:
-                # Tin nhắn thường
+                valid, error_msg = validate_message(msg)
+                if not valid:
+                    send_message(conn, f"[LỖI] {error_msg}")
+                    continue
+                
                 if room_type == "public":
                     save_msg(username, msg)
                     broadcast_public(username, msg)
-                    logging.info(f"[CHUNG] {username}: {msg}")
+                    logging.info(f"[CHUNG] {username}: {msg[:50]}...")
                 elif room_type == "private":
                     save_msg(username, msg, room_target)
-                    # Gửi cho người nhận
                     partner_conn = get_user_conn(room_target)
                     if partner_conn:
-                        # Kiểm tra người nhận vẫn đang chat với mình
                         partner_rt, partner_tg = get_current_state(room_target)
                         if partner_rt == "private" and partner_tg == username:
-                            try:
-                                partner_conn.send(f"[{username}] {msg}".encode('utf-8'))
-                            except:
-                                pass
-                    logging.info(f"[RIÊNG] {username} -> {room_target}: {msg}")
+                            send_message(partner_conn, f"[{username}] {msg}")
+                    logging.info(f"[RIÊNG] {username} -> {room_target}: {msg[:50]}...")
                     
+    except socket.timeout:
+        if username:
+            logging.warning(f"[TIMEOUT] {username} - Không hoạt động trong {AUTH_TIMEOUT if not username else CHAT_TIMEOUT}s")
+        else:
+            logging.warning(f"[TIMEOUT] {addr} - Timeout khi xác thực")
     except ConnectionResetError:
         logging.warning(f"[NGẮT ĐỘT NGỘT] {username} - ConnectionResetError")
     except BrokenPipeError:
         logging.warning(f"[NGẮT ĐỘT NGỘT] {username} - BrokenPipeError")
+    except UnicodeDecodeError:
+        logging.error(f"[LỖI] {username or addr} - Lỗi decode UTF-8")
     except Exception as e:
         logging.error(f"[LỖI] {username or addr}: {e}")
     finally:
@@ -553,18 +652,20 @@ def handle_client(conn, addr):
                 cleanup_user(username, final_room_type, final_room_target)
         try:
             conn.close()
-        except:
+        except (OSError, AttributeError):
             pass
 
-# === KHỞI ĐỘNG SERVER ===
 count = db_init()
 ServerSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 ServerSocket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 ServerSocket.bind((Local_IP, Local_Port))
-ServerSocket.listen(10)
+ServerSocket.listen(SOCKET_BACKLOG)
 
 logging.info("=" * 50)
-logging.info(f"SERVER BẬT - {Local_IP}:{Local_Port} - {count} tài khoản")
+logging.info(f"SERVER BẬT - {Local_IP}:{Local_Port}")
+logging.info(f"Giới hạn: {MAX_CLIENTS} clients, tin nhắn {MAX_MESSAGE_LENGTH} ký tự")
+logging.info(f"Timeout: Xác thực {AUTH_TIMEOUT}s, Chat {CHAT_TIMEOUT}s")
+logging.info(f"Database: {count} tài khoản")
 logging.info("=" * 50)
 
 def accept_clients():
@@ -580,8 +681,16 @@ def accept_clients():
 
 threading.Thread(target=accept_clients, daemon=True).start()
 
-# === LỆNH SERVER ===
-print("Lệnh: users | rooms | requests | exit")
+def cleanup_requests_periodically():
+    while True:
+        time.sleep(10)
+        expired_count = cleanup_expired_requests()
+        if expired_count > 0:
+            logging.info(f"[DỌN DẸP] Xóa {expired_count} yêu cầu hết hạn")
+
+threading.Thread(target=cleanup_requests_periodically, daemon=True).start()
+
+print("\nLệnh: users | rooms | requests | limits | exit")
 while True:
     try:
         cmd = input().strip().lower()
@@ -591,7 +700,7 @@ while True:
                 if not Client_list:
                     print("Không có client nào")
                 else:
-                    print(f"\n--- CLIENT ({len(Client_list)}) ---")
+                    print(f"\n--- CLIENT ({len(Client_list)}/{MAX_CLIENTS}) ---")
                     for _, addr, u, rt, tg in Client_list:
                         status = "Chung" if rt == "public" else f"Riêng với {tg}"
                         print(f"  {u} | {addr[0]}:{addr[1]} | {status}")
@@ -615,14 +724,25 @@ while True:
                         print(f"  {s} -> {r} ({int(time.time()-ts)}s trước)")
                     print()
         
+        elif cmd == 'limits':
+            print(f"\n--- GIỚI HẠN SERVER ---")
+            print(f"Max clients: {MAX_CLIENTS}")
+            print(f"Max message length: {MAX_MESSAGE_LENGTH} ký tự")
+            print(f"Username: {MIN_USERNAME_LENGTH}-{MAX_USERNAME_LENGTH} ký tự (a-z, A-Z, 0-9, _)")
+            print(f"Password: {MIN_PASSWORD_LENGTH}-{MAX_PASSWORD_LENGTH} ký tự")
+            print(f"Request timeout: {REQUEST_TIMEOUT} giây")
+            print(f"Auth timeout: {AUTH_TIMEOUT} giây")
+            print(f"Chat timeout: {CHAT_TIMEOUT} giây")
+            print(f"Current clients: {get_client_count()}/{MAX_CLIENTS}")
+            print()
+        
         elif cmd == 'exit':
             logging.info("SERVER TẮT")
             ServerSocket.close()
             os._exit(0)
         
         else:
-            if cmd:
-                print("Lệnh: users | rooms | requests | exit")
+            print("Lệnh: users | rooms | requests | limits | exit")
             
     except (KeyboardInterrupt, EOFError):
         logging.info("\nSERVER TẮT (Ctrl+C)")
