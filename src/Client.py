@@ -3,12 +3,10 @@ import threading
 import sys
 import os
 import struct
-import logging
 
-
-SERVER_IP = "127.0.0.1"
-SERVER_PORT = 20000
-MAX_DATA = 1024
+Server_IP = "127.0.0.1"
+Server_Port = 20000
+Max_data = 1024
 
 client_socket = None
 running = True
@@ -18,48 +16,41 @@ def clear_screen():
     """Xóa màn hình console"""
     os.system('cls' if os.name == 'nt' else 'clear')
 
-
 def print_separator():
     """In dòng phân cách"""
     print("=" * 60)
-    
-def send_message(conn, msg):
+def send_message(sock, msg):
     """Gửi tin nhắn với header chứa độ dài (4 bytes)"""
     try:
         msg_bytes = msg.encode('utf-8')
         msg_length = len(msg_bytes)
-        conn.sendall(struct.pack('!I', msg_length) + msg_bytes)
+        sock.sendall(struct.pack('!I', msg_length) + msg_bytes)
         return True
-    except (BrokenPipeError, ConnectionResetError, OSError) as e:
-        logging.error(f"[SEND ERROR] {e}")
-        return False
     except Exception as e:
-        logging.error(f"[SEND ERROR] {e}")
+        print(f"\n[LỖI] Gửi tin thất bại: {e}")
         return False
 
-
-def recv_message(conn):
+def recv_message(sock):
     """Nhận tin nhắn với header chứa độ dài (4 bytes)"""
     try:
         raw_msglen = b''
         while len(raw_msglen) < 4:
-            chunk = conn.recv(4 - len(raw_msglen))
+            chunk = sock.recv(4 - len(raw_msglen))
             if not chunk:
-                return None
+                return None  
             raw_msglen += chunk
-
+        
         msg_length = struct.unpack('!I', raw_msglen)[0]
-        if msg_length > 10*1024*1024:  # 10 MB
+        if msg_length > 10 * 1024 * 1024:  # 10MB
             print(f"\n[CẢNH BÁO] Tin nhắn quá lớn: {msg_length} bytes")
             return None
         msg_data = b''
-
         while len(msg_data) < msg_length:
-            chunk = conn.recv(min(msg_length - len(msg_data), MAX_DATA))
+            chunk = sock.recv(min(msg_length - len(msg_data), Max_data))
             if not chunk:
                 return None
             msg_data += chunk
-            
+        
         return msg_data.decode('utf-8')
     except struct.error:
         print("\n[LỖI] Lỗi đọc header tin nhắn")
@@ -68,7 +59,7 @@ def recv_message(conn):
         print("\n[LỖI] Lỗi decode UTF-8")
         return None
     except Exception as e:
-        logging.error(f"[RECV ERROR] {e}")
+        print(f"\n[LỖI] Lỗi nhận tin: {e}")
         return None
 
 def receive_messages():
@@ -83,8 +74,6 @@ def receive_messages():
                 print("\n[HỆ THỐNG] Mất kết nối với server")
                 running = False
                 break
-            
-            # Xử lý các loại message khác nhau
             if message.startswith("XÁC THỰC:"):
                 content = message.split(":", 1)[1]
                 print(f"\n{content}")
@@ -127,7 +116,7 @@ def receive_messages():
                 try:
                     sender = message[1:message.index("]")]
                     content = message[message.index("]") + 2:]
-                    print(f"\n {sender}: {content}")
+                    print(f"\n 💬 {sender}: {content}")
                     print("> ", end='', flush=True)
                 except:
                     print(f"\n{message}")
@@ -156,19 +145,15 @@ def receive_messages():
 def send_messages():
     """Thread gửi tin nhắn tới server"""
     global running
-    
     while running:
         try:
             message = input()
-            
             if not running:
                 break
-            
             if message.strip():
                 if not send_message(client_socket, message):
-                     running = False
-                     break
-
+                    running = False
+                    break
                 if message.strip() == '/exit':
                     running = False
                     break
@@ -184,34 +169,26 @@ def send_messages():
             break
 
 def main():
-    """Hàm chính khởi động client"""
     global client_socket, running
-    
-    # Hiển thị banner
     clear_screen()
     print_separator()
     print("         CHAT CLIENT - KẾT NỐI VỚI SERVER")
     print_separator()
-    print(f"Server: {SERVER_IP}:{SERVER_PORT}")
+    print(f"Server: {Server_IP}:{Server_Port}")
     print_separator()
     
     try:
-        # Kết nối tới server
         client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        client_socket.connect((SERVER_IP, SERVER_PORT))
+        client_socket.connect((Server_IP, Server_Port))
         print("\n✓ Đã kết nối thành công!")
         print("\nĐang chờ server...")
-        
-        # Tạo thread nhận tin nhắn
         receive_thread = threading.Thread(target=receive_messages, daemon=True)
         receive_thread.start()
-        
-        # Thread chính xử lý gửi tin
         send_messages()
         
     except ConnectionRefusedError:
         print("\n✗ Không thể kết nối! Server có thể chưa bật.")
-        print(f"   Kiểm tra server đang chạy tại {SERVER_IP}:{SERVER_PORT}")
+        print(f"   Kiểm tra server đang chạy tại {Server_IP}:{Server_Port}")
     except KeyboardInterrupt:
         print("\n\n[HỆ THỐNG] Thoát bằng Ctrl+C")
     except Exception as e:
