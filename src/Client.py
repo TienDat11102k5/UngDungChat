@@ -116,7 +116,7 @@ def receive_messages():
                 try:
                     sender = message[1:message.index("]")]
                     content = message[message.index("]") + 2:]
-                    print(f"\n 💬 {sender}: {content}")
+                    print(f"\n {sender}: {content}")
                     print("> ", end='', flush=True)
                 except:
                     print(f"\n{message}")

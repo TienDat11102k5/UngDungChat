@@ -287,7 +287,7 @@ def update_user_state(username, new_room_type, new_room_target):
                 logging.info(f"[CẬP NHẬT] {username}: {rt}/{tg} -> {new_room_type}/{new_room_target}")
                 return True
     return False
-
+# Lang nghe
 def handle_client(conn, addr):
     username = None 
     try:

@@ -8,7 +8,6 @@ import random
 # === CẤU HÌNH TEST ===
 SERVER_IP = "127.0.0.1"
 SERVER_PORT = 20000
-# Server của bạn chỉ cho 5, ta sẽ thử 6 để xem nó từ chối đúng không
 NUM_CLIENTS_TO_TEST = 6
 TEST_DURATION_SECONDS = 60 # Chạy test trong 60 giây
 BASE_USERNAME = "chaostester"
