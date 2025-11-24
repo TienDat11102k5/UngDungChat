@@ -58,6 +58,8 @@ def recv_message(sock):
     except UnicodeDecodeError:
         print("\n[LỖI] Lỗi decode UTF-8")
         return None
+    except OSError: 
+        return None
     except Exception as e:
         print(f"\n[LỖI] Lỗi nhận tin: {e}")
         return None
